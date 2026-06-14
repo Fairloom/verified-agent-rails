@@ -1,0 +1,33 @@
+# Keep the build context small and force a clean install inside the image.
+
+# dependencies — reinstalled via `npm ci` in the image
+**/node_modules
+
+# build outputs / caches
+web/.next
+web/out
+dist
+**/*.tsbuildinfo
+
+# not part of the web service
+contracts
+agent/src
+dashboard-standalone.html
+
+# secrets — never copy local env/wallet files into the image
+**/.env
+**/.env.*
+!**/.env.example
+**/.agent-wallet.json
+**/.attestation-audit.log
+
+# vcs / tooling / misc
+.git
+.githooks
+.gitignore
+.gitmodules
+**/.DS_Store
+Dockerfile
+.dockerignore
+fly.toml
+*.md
