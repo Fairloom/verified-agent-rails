@@ -1,0 +1,30 @@
+# Fly.io config for the VAR dashboard (web/).
+# Docs: https://fly.io/docs/reference/configuration/
+
+app = "var-dashboard"          # change to your chosen app name (must be globally unique)
+primary_region = "iad"         # pick a region near you: `fly platform regions`
+
+[build]
+  dockerfile = "Dockerfile"
+
+  # NEXT_PUBLIC_* are inlined into the client bundle at build time. These are
+  # PUBLIC values (not secrets) — fill them in so the browser bundle has them.
+  # Server-only secrets go through `fly secrets set` instead (see commands below).
+  [build.args]
+    NEXT_PUBLIC_DYNAMIC_ENVIRONMENT_ID = "f9b3f378-061b-4f9d-8824-4cd5ef531478"   # required for wallet connect (public)
+    # Optional overrides — leave unset to use the app's in-code defaults
+    # (live agent 0x69e1…cC54, and the x402 relay for /register). Only set these
+    # to override; an empty value is treated as unset by the Dockerfile.
+    # NEXT_PUBLIC_AGENT_ADDRESS = "0x..."
+    # NEXT_PUBLIC_REGISTER_RELAY_URL = "https://..."
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0      # bump to 1 to avoid cold starts during a live demo
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"                # the Dynamic MPC SDK is memory-hungry; don't go below 1gb
