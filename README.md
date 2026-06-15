@@ -98,7 +98,9 @@ We would rather show you exactly what is real than overclaim. The leash, the ide
 
 ## Standards position
 
-VAR is an asset-layer spending-mandate primitive that composes with ERC-8004 (Trustless Agents). Where ERC-8004 covers agent identity, reputation, and validation, VAR covers scoped, revocable spend enforced by the asset, the gap none of the current agent ERCs (8001 coordination, 8126 verification, 8183 commerce) fill. The reference implementation here will be published as an open spec and submitted to the EIP process for a community-assigned number; it is not self-numbered.
+VAR is an asset-layer spending-mandate primitive that composes with ERC-8004 (Trustless Agents). Where ERC-8004 covers agent identity, reputation, and validation — and explicitly leaves payments out of scope — VAR covers scoped, revocable spend, and is distinguished by *where* it enforces: at the asset. ERC-8118 (Agent Authorization) and MetaMask's ERC-7710/7715 delegation already express scoped, capped, revocable mandates at the wallet/account layer; VAR's contribution is to enforce the same constraint at the token via ERC-7943 `canTransfer`, so the cap holds even if the agent's signing key is fully compromised. Biometric (World ID) rooting of the human→agent binding is the second differentiator; none of the account-layer stacks are personhood-rooted.
+
+Rather than self-number a competing EIP, VAR positions as the open-source reference implementation of asset-layer enforcement and seeks to contribute that layer into the ERC-8118 / ERC-8004 line (and the x402 payment companion being co-developed with the 8004 authors). The spec text here is published openly; any EIP number is community-assigned, not self-numbered.
 
 ---
 

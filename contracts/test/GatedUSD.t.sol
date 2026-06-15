@@ -152,10 +152,28 @@ contract GatedUSDTest is AttestationHelper {
         assertEq(token.canTransfer(from, payee, amount), ok);
     }
 
-    function test_faucetMint_unrestricted() public {
-        vm.prank(makeAddr("anyone"));
+    function test_faucetMint_onlyOwnerOrMinter() public {
+        // A random caller cannot mint.
+        address anyone = makeAddr("anyone");
+        vm.prank(anyone);
+        vm.expectRevert(abi.encodeWithSignature("NotMinter(address)", anyone));
+        token.faucetMint(payee, 123e6);
+
+        // The owner (this test, the deployer) can.
         token.faucetMint(payee, 123e6);
         assertEq(token.balanceOf(payee), 123e6);
+
+        // A registered minter can; revoking the grant blocks it again.
+        address minter = makeAddr("minter");
+        token.setMinter(minter, true);
+        vm.prank(minter);
+        token.faucetMint(payee, 1e6);
+        assertEq(token.balanceOf(payee), 124e6);
+
+        token.setMinter(minter, false);
+        vm.prank(minter);
+        vm.expectRevert(abi.encodeWithSignature("NotMinter(address)", minter));
+        token.faucetMint(payee, 1e6);
     }
 
     /// Minting to an agent is not gated; only outbound transfers from agents are.

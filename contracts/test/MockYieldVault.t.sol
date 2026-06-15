@@ -19,6 +19,7 @@ contract MockYieldVaultTest is AttestationHelper {
         mirror = new DelegationMirror();
         token = new GatedUSD(address(mirror));
         vault = new MockYieldVault(token);
+        token.setMinter(address(vault), true);
         _registerAttestor(mirror);
         token.faucetMint(human, 1_000e6);
     }

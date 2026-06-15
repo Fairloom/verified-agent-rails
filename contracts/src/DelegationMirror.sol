@@ -7,11 +7,17 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /// @title DelegationMirror
 /// @notice Onchain registry of scoped authority delegated by a World ID verified
-///         principal to an AI agent. Vocabulary aligned with ERC-8226 (RAMS, Draft):
-///         mandate, principal, scoped authority. Acts as the transfer gate consulted
-///         by GatedUSD. Mandates can only be created through submitAttestation
-///         with a registered attestor's EIP-712 signature; there is no
-///         permissionless path, which is what closes the squatting attack.
+///         principal to an AI agent. Sits in the agent-standards stack as the
+///         asset-layer authorization complement to identity (ERC-8004 Trustless
+///         Agents) and to wallet/account-layer authorization (ERC-8118 Agent
+///         Authorization): identity answers "who is behind this agent", this
+///         registry answers "what may it spend", and the constraint is enforced at
+///         the token via ERC-7943 canTransfer (GatedUSD), so it holds even if the
+///         agent's signing key is compromised. Vocabulary — mandate, principal,
+///         scoped authority — follows that line. Acts as the transfer gate
+///         consulted by GatedUSD. Mandates can only be created through
+///         submitAttestation with a registered attestor's EIP-712 signature; there
+///         is no permissionless path, which is what closes the squatting attack.
 contract DelegationMirror is Ownable, EIP712 {
     struct Mandate {
         address principal;

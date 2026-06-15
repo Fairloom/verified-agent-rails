@@ -23,8 +23,21 @@ contract Deploy is Script {
         uint256 tokenBlock = block.number;
         MockYieldVault vault = new MockYieldVault(token);
         uint256 vaultBlock = block.number;
+        // The vault realizes accrued yield by minting into itself; grant it the
+        // mint role now that faucetMint is owner/minter-gated.
+        token.setMinter(address(vault), true);
         ServiceSink sink = new ServiceSink(IERC20(address(token)));
         uint256 sinkBlock = block.number;
+
+        // Production hardening: hand mirror + token ownership to a multisig so no
+        // single key can register attestors or mint. Set OWNER_MULTISIG to enable;
+        // unset (the demo default) leaves the deployer as owner. When set, the
+        // multisig — not the deployer — must run SetAttestor thereafter.
+        address ownerMultisig = vm.envOr("OWNER_MULTISIG", address(0));
+        if (ownerMultisig != address(0)) {
+            mirror.transferOwnership(ownerMultisig);
+            token.transferOwnership(ownerMultisig);
+        }
         vm.stopBroadcast();
 
         string memory json = "deployment";

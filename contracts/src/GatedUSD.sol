@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {DelegationMirror} from "./DelegationMirror.sol";
 
 /// @title GatedUSD
@@ -9,13 +10,27 @@ import {DelegationMirror} from "./DelegationMirror.sol";
 ///         addresses holding a mandate in the DelegationMirror are gated by the
 ///         mirror's checkTransfer. Humans and contracts without a mandate transfer
 ///         freely. Exposes the ERC-7943 canTransfer surface (Final).
-contract GatedUSD is ERC20 {
+contract GatedUSD is ERC20, Ownable {
     DelegationMirror public immutable mirror;
 
-    error TransferBlocked(bytes32 reason);
+    /// @notice Addresses permitted to mint. The deployer (owner) is implicitly
+    ///         permitted; the yield vault is registered here so it can realize
+    ///         accrued yield. A production token would have no mint at all.
+    mapping(address minter => bool) public isMinter;
 
-    constructor(address mirror_) ERC20("Gated USD", "gUSD") {
+    error TransferBlocked(bytes32 reason);
+    error NotMinter(address caller);
+
+    event MinterSet(address indexed minter, bool allowed);
+
+    constructor(address mirror_) ERC20("Gated USD", "gUSD") Ownable(msg.sender) {
         mirror = DelegationMirror(mirror_);
+    }
+
+    /// @notice Grant or revoke mint permission. Owner only.
+    function setMinter(address minter, bool allowed) external onlyOwner {
+        isMinter[minter] = allowed;
+        emit MinterSet(minter, allowed);
     }
 
     function decimals() public pure override returns (uint8) {
@@ -48,8 +63,12 @@ contract GatedUSD is ERC20 {
         return ok;
     }
 
-    /// @notice Unrestricted mint, hackathon demo token only.
+    /// @notice Demo faucet mint, access-controlled: owner or a registered minter
+    ///         only (the latter is the yield vault realizing accrued yield). This
+    ///         keeps the reference implementation free of an unrestricted public
+    ///         mint; a production token would drop this function entirely.
     function faucetMint(address to, uint256 amount) public {
+        if (msg.sender != owner() && !isMinter[msg.sender]) revert NotMinter(msg.sender);
         _mint(to, amount);
     }
 }
