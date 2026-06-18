@@ -1,7 +1,7 @@
 # VAR — Positioning
 
 > Working strategy doc. How VAR is differentiated, who it competes with, and how it
-> earns the canonical-reference position under an MIT license. Sourced from two
+> earns the canonical-reference position under an Apache-2.0 license. Sourced from two
 > adversarially-verified research passes (2026-06); claims below carry their support.
 
 ## The one sentence
@@ -73,7 +73,7 @@ containment boundary are in [SECURITY.md](./SECURITY.md).
 3. **Be the reference implementation others cite**: best-in-class docs, a live Arc demo,
    an importable SDK, audited security properties. Authors and reference impls — not EIP
    editors — are the durable owners of a standard.
-4. **Trademark the name** (legally distinct from MIT). Stops a same-name clone; the
+4. **Trademark the name** (legally distinct from the Apache-2.0 license). Stops a same-name clone; the
    durable defense against an honest rebrand is being first, owning the reference, and
    holding the contributor community.
 5. **Foundation donation is a capstone, not an opener.** Donating cedes real control

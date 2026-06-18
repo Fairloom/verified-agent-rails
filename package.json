@@ -1,8 +1,8 @@
 {
   "name": "verified-agent-rails",
   "private": true,
-  "license": "MIT",
-  "author": "Alex Lazarev",
+  "license": "Apache-2.0",
+  "author": "Fairloom",
   "workspaces": [
     "shared",
     "agent",
