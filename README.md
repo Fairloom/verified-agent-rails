@@ -125,4 +125,4 @@ Full run and redeploy steps are in `RUN.md`. Live contract addresses are in `sha
 
 ## License
 
-MIT
+Apache-2.0. Copyright 2026 Fairloom. See `LICENSE` and `NOTICE`.
