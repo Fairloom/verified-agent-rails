@@ -15,5 +15,14 @@
     "address": "0x0B7EfBaeD5f01E54442c26520A728F859EA6a2bd",
     "deployBlock": 46942608
   },
-  "chainId": 5042002
+  "chainId": 5042002,
+  "eth-sepolia": {
+    "AgentExecutor": "0xc81949Cf5b52BDc7890Fd5040A9Cd0cdb4B59952",
+    "AgentMandate": "0xD68E1bb972cA4EF7F5764FBf6d685a6DfC26778e",
+    "ComplianceProvider": "0xa90D2503D5D9b80ECC27856Ff76F892B8C02f278",
+    "DelegationMirror": null,
+    "GatedUSDRams": null,
+    "VARComplianceProviderAdapter": null,
+    "chainId": 11155111
+  }
 }
