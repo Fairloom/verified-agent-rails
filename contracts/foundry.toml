@@ -10,8 +10,14 @@ solc_version = "0.8.26"
 evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
-# deploy script writes the address book consumed by agent and web
-fs_permissions = [{ access = "read-write", path = "../shared" }]
+# deploy script writes the address book consumed by agent and web;
+# rams-artifacts holds prebuilt ERC-8226 reference bytecode (solc 0.8.30,
+# rebuilt via scripts/build-rams-ref-artifacts.sh) that tests deploy with
+# vm.getCode, since the reference pragma is newer than this repo's pin
+fs_permissions = [
+    { access = "read-write", path = "../shared" },
+    { access = "read", path = "./test/rams-artifacts" },
+]
 
 # Workstream B (QA): property/fuzz + stateful-invariant coverage.
 [profile.default.fuzz]
@@ -24,6 +30,8 @@ fail_on_revert = false
 
 [rpc_endpoints]
 arc_testnet = "${ARC_TESTNET_RPC_URL}"
+# ERC-8226 fork tests; the live RAMS deployment is on Ethereum Sepolia
+eth_sepolia = "${ETH_SEPOLIA_RPC_URL}"
 
 [fmt]
 line_length = 120
