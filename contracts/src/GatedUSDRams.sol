@@ -2,6 +2,8 @@
 pragma solidity ^0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {GatedUSD} from "./GatedUSD.sol";
 import {IAgentMandate} from "./interfaces/rams/IAgentMandate.sol";
 import {IComplianceProvider} from "./interfaces/rams/IComplianceProvider.sol";
@@ -189,11 +191,17 @@ contract GatedUSDRams is GatedUSD {
         return (true, "OK");
     }
 
-    /// @notice Re-derives which RAMS registry check fails for this transfer,
-    ///         in the registry's own evaluation order (asset, existence,
-    ///         window, revocation, action, freeze, per-tx cap, cumulative
-    ///         cap — ERC-8226 canExecute semantics). The registry itself only
-    ///         answers yes/no; this view gives agents the why.
+    /// @notice Re-derives which RAMS registry check fails for this transfer, in
+    ///         the ERC-8226 spec's normative canExecute order (existence, asset,
+    ///         window, revocation, action, freeze, per-tx cap, cumulative cap).
+    ///         The registry itself only answers yes/no; this view gives agents
+    ///         the why.
+    /// @dev The DEPLOYED reference evaluates asset before existence
+    ///      (AgentMandate.sol canExecute checks `asset != m.asset` first, then
+    ///      delegates to _mandateAllows). Both orders return the same bool, so
+    ///      this is only a reason-code question, and we follow the spec: for a
+    ///      pair with no mandate at all, RAMS_NO_MANDATE is the more useful
+    ///      answer than RAMS_WRONG_ASSET.
     function ramsDiagnose(address agent, address holder, uint256 value) public view returns (bytes32) {
         IAgentMandate.Mandate memory m = rams.getMandate(agent, holder);
         if (m.principal == address(0)) return RAMS_NO_MANDATE;
@@ -208,6 +216,25 @@ contract GatedUSDRams is GatedUSD {
             return RAMS_OVER_CUM_CAP;
         }
         return RAMS_OK;
+    }
+
+    /// @notice ERC-165. ERC-8226 opens its Specification with "All
+    ///         implementations MUST implement ERC-165", so a RAMS-aware asset
+    ///         has to be discoverable as one.
+    ///
+    /// @dev Deliberately does NOT advertise `IERC7943Fungible`. GatedUSD exposes
+    ///      `canTransfer` — 1 of that interface's 6 functions — and implements
+    ///      none of `forcedTransfer`, `setFrozenTokens`, `canSend`, `canReceive`
+    ///      or `getFrozenTokens`. Claiming the id would make ERC-165 discovery
+    ///      lie to integrators, which is worse than not answering at all. If the
+    ///      full ERC-7943 surface lands later, add the id then.
+    ///
+    ///      Ids are XORs of the selectors in each interface definition, not
+    ///      literals: IERC165 0x01ffc9a7, IERC20 0x36372b07,
+    ///      IERC20Metadata 0xa219a025. Asserted in test_SupportsInterface_Ids.
+    function supportsInterface(bytes4 interfaceId) public view virtual returns (bool) {
+        return interfaceId == type(IERC165).interfaceId || interfaceId == type(IERC20).interfaceId
+            || interfaceId == type(IERC20Metadata).interfaceId;
     }
 
     /// @dev Live checkPrincipal on the mandate's provider. A reverting or

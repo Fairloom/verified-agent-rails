@@ -126,6 +126,145 @@ contract VARComplianceProviderAdapterTest is RamsTestBase {
         assertFalse(adapter.supportsInterface(0xdeadbeef));
     }
 
+    /// @notice Pin the adapter's ids to the values derived from the SPEC's own
+    ///         interface declarations (XOR of the selectors it lists), not to
+    ///         whatever solc happens to compute for our local copy. 0xfa2a39b3
+    ///         is grantPrincipal(address,bytes32,uint48) ^
+    ///         revokePrincipal(address,uint8) ^ checkPrincipal(address,bytes32),
+    ///         and the LIVE Sepolia ComplianceProvider at 0xa90D2503… answers
+    ///         true for it (see RamsFork test_Fork_Erc165Surfaces).
+    function test_SupportsInterface_IdsMatchSpec() public view {
+        assertEq(type(IComplianceProvider).interfaceId, bytes4(0xfa2a39b3), "IComplianceProvider id per spec");
+        assertEq(type(IERC165).interfaceId, bytes4(0x01ffc9a7), "IERC165 id");
+        assertTrue(adapter.supportsInterface(0xfa2a39b3));
+        assertTrue(adapter.supportsInterface(0x01ffc9a7));
+        // ERC-165 requires 0xffffffff to be false.
+        assertFalse(adapter.supportsInterface(0xffffffff), "ERC-165: 0xffffffff MUST be false");
+    }
+
+    // ------------------------------------------------------------------
+    // PrincipalRevoked: the spec's freeze-relay signal (Security
+    // Considerations). Every path that makes a principal ineligible must
+    // be able to reach it, with the same ReasonCode checkPrincipal reports.
+    // ------------------------------------------------------------------
+
+    function test_PrincipalRevoked_OnMirrorRevoke() public {
+        bytes32 ref = _attestAndBind();
+        vm.prank(principal);
+        mirror.revoke(varAgent);
+
+        assertFalse(adapter.revocationAnnounced(ref));
+        vm.expectEmit(true, true, false, true, address(adapter));
+        emit IComplianceProvider.PrincipalRevoked(principal, ref, IComplianceProvider.ReasonCode.ATTESTATION_REVOKED);
+        IComplianceProvider.ReasonCode reason = adapter.syncRevocation(ref);
+
+        assertEq(uint8(reason), uint8(IComplianceProvider.ReasonCode.ATTESTATION_REVOKED));
+        assertTrue(adapter.revocationAnnounced(ref));
+    }
+
+    function test_PrincipalRevoked_OnExpiryCarriesKycExpired() public {
+        bytes32 ref = _attestAndBind();
+        vm.warp(uint256(expiry));
+
+        vm.expectEmit(true, true, false, true, address(adapter));
+        emit IComplianceProvider.PrincipalRevoked(principal, ref, IComplianceProvider.ReasonCode.KYC_EXPIRED);
+        IComplianceProvider.ReasonCode reason = adapter.syncRevocation(ref);
+        assertEq(uint8(reason), uint8(IComplianceProvider.ReasonCode.KYC_EXPIRED));
+    }
+
+    /// @notice Supersession is the one ineligibility path that happens INSIDE
+    ///         the adapter, so it announces without any poke.
+    function test_PrincipalRevoked_OnSupersedingBind() public {
+        bytes32 refOld = _attestAndBind();
+
+        DelegationMirror.Attestation memory a2 = _liveAttestation(2);
+        mirror.submitAttestation(a2, _sign(mirror, a2, attestorKey));
+
+        vm.expectEmit(true, true, false, true, address(adapter));
+        emit IComplianceProvider.PrincipalRevoked(
+            principal, refOld, IComplianceProvider.ReasonCode.ATTESTATION_REVOKED
+        );
+        bytes32 refNew = adapter.bindIdentity(a2);
+
+        assertTrue(adapter.revocationAnnounced(refOld), "displaced ref announced");
+        assertFalse(adapter.revocationAnnounced(refNew), "fresh ref is live");
+    }
+
+    /// @dev The emitted ReasonCode must equal what checkPrincipal returns, for
+    ///      every ineligibility path — that is what makes the event auditable.
+    function test_PrincipalRevoked_ReasonMatchesCheckPrincipal() public {
+        bytes32 ref = _attestAndBind();
+        vm.warp(uint256(expiry));
+
+        (bool ok, IComplianceProvider.ReasonCode readReason,) = adapter.checkPrincipal(principal, ref);
+        assertFalse(ok);
+        IComplianceProvider.ReasonCode emittedReason = adapter.syncRevocation(ref);
+        assertEq(uint8(emittedReason), uint8(readReason), "event ReasonCode == checkPrincipal ReasonCode");
+    }
+
+    /// @notice Regression: DelegationMirror.revoke leaves `nonce` unchanged, so
+    ///         bindIdentity's current-attestation test alone does not reject a
+    ///         revoked mandate. Re-binding one would emit PrincipalGranted for
+    ///         an ineligible principal and reset the revocationAnnounced latch,
+    ///         letting PrincipalRevoked fire twice for the same ref.
+    function test_BindRejectsRevokedMandate_LatchCannotBeReset() public {
+        bytes32 ref = _attestAndBind();
+        vm.prank(principal);
+        mirror.revoke(varAgent);
+        adapter.syncRevocation(ref);
+        assertTrue(adapter.revocationAnnounced(ref));
+
+        DelegationMirror.Attestation memory a = _liveAttestation(1); // still "current" by nonce
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VARComplianceProviderAdapter.MandateNotLive.selector,
+                varAgent,
+                IComplianceProvider.ReasonCode.ATTESTATION_REVOKED
+            )
+        );
+        adapter.bindIdentity(a);
+
+        assertTrue(adapter.revocationAnnounced(ref), "latch survives the re-bind attempt");
+    }
+
+    function test_BindRejectsExpiredMandate() public {
+        DelegationMirror.Attestation memory a = _liveAttestation(1);
+        mirror.submitAttestation(a, _sign(mirror, a, attestorKey));
+        vm.warp(uint256(expiry));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VARComplianceProviderAdapter.MandateNotLive.selector,
+                varAgent,
+                IComplianceProvider.ReasonCode.KYC_EXPIRED
+            )
+        );
+        adapter.bindIdentity(a);
+    }
+
+    function test_SyncRevocation_RejectsEligibleUnknownAndDuplicate() public {
+        bytes32 ref = _attestAndBind();
+
+        // Still live: nothing to announce.
+        vm.expectRevert(abi.encodeWithSelector(VARComplianceProviderAdapter.PrincipalStillEligible.selector, ref));
+        adapter.syncRevocation(ref);
+
+        // Never bound.
+        vm.expectRevert(
+            abi.encodeWithSelector(VARComplianceProviderAdapter.UnknownIdentityRef.selector, bytes32("nope"))
+        );
+        adapter.syncRevocation(bytes32("nope"));
+
+        // Announce once, then refuse to spam the relay.
+        vm.prank(principal);
+        mirror.revoke(varAgent);
+        adapter.syncRevocation(ref);
+        vm.expectRevert(
+            abi.encodeWithSelector(VARComplianceProviderAdapter.RevocationAlreadyAnnounced.selector, ref)
+        );
+        adapter.syncRevocation(ref);
+    }
+
     /// @notice End-to-end: the adapter as complianceProvider inside a RAMS
     ///         mandate. VAR's one-click mirror revoke propagates through the
     ///         adapter into the token's execution-path re-check — no enforcer,

@@ -303,4 +303,47 @@ contract GatedUSDRamsTest is RamsTestBase {
         vm.expectRevert(); // OZ ERC20InsufficientAllowance
         gusd.transferFrom(principal, sink, 1e6);
     }
+
+    // ------------------------------------------------------------------
+    // ERC-165. ERC-8226 Specification, first line: "All implementations
+    // MUST implement ERC-165."
+    // ------------------------------------------------------------------
+
+    /// @dev Ids are asserted against values XORed from the interface
+    ///      DEFINITIONS, so a wrong literal cannot pass by agreeing with
+    ///      itself: IERC165 = supportsInterface(bytes4) = 0x01ffc9a7;
+    ///      IERC20 = totalSupply ^ balanceOf ^ transfer ^ allowance ^ approve ^
+    ///      transferFrom = 0x36372b07; IERC20Metadata = name ^ symbol ^
+    ///      decimals = 0xa219a025.
+    function test_SupportsInterface_IdsMatchDefinitions() public view {
+        bytes4 erc165 = bytes4(keccak256("supportsInterface(bytes4)"));
+        bytes4 erc20 = bytes4(keccak256("totalSupply()")) ^ bytes4(keccak256("balanceOf(address)"))
+            ^ bytes4(keccak256("transfer(address,uint256)")) ^ bytes4(keccak256("allowance(address,address)"))
+            ^ bytes4(keccak256("approve(address,uint256)"))
+            ^ bytes4(keccak256("transferFrom(address,address,uint256)"));
+        bytes4 erc20meta =
+            bytes4(keccak256("name()")) ^ bytes4(keccak256("symbol()")) ^ bytes4(keccak256("decimals()"));
+
+        assertEq(erc165, bytes4(0x01ffc9a7), "IERC165 id derived from its definition");
+        assertEq(erc20, bytes4(0x36372b07), "IERC20 id derived from its definition");
+        assertEq(erc20meta, bytes4(0xa219a025), "IERC20Metadata id derived from its definition");
+
+        assertTrue(gusd.supportsInterface(erc165), "MUST advertise ERC-165");
+        assertTrue(gusd.supportsInterface(erc20));
+        assertTrue(gusd.supportsInterface(erc20meta));
+    }
+
+    function test_SupportsInterface_NegativeCases() public view {
+        assertFalse(gusd.supportsInterface(0xffffffff), "ERC-165: 0xffffffff MUST be false");
+        assertFalse(gusd.supportsInterface(0xdeadbeef));
+
+        // We expose canTransfer but NOT the rest of IERC7943Fungible
+        // (forcedTransfer, setFrozenTokens, canSend, canReceive,
+        // getFrozenTokens), so we must not claim that id.
+        bytes4 erc7943Fungible = bytes4(keccak256("forcedTransfer(address,address,uint256)"))
+            ^ bytes4(keccak256("setFrozenTokens(address,uint256)")) ^ bytes4(keccak256("canSend(address)"))
+            ^ bytes4(keccak256("canReceive(address)")) ^ bytes4(keccak256("getFrozenTokens(address)"))
+            ^ bytes4(keccak256("canTransfer(address,address,uint256)"));
+        assertFalse(gusd.supportsInterface(erc7943Fungible), "must not claim a surface we only partly implement");
+    }
 }

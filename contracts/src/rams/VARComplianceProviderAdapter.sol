@@ -43,16 +43,31 @@ contract VARComplianceProviderAdapter is IComplianceProvider {
 
     struct Binding {
         address agent;
+        // Principal at bind time. Stored (rather than re-read from the mirror)
+        // so PrincipalRevoked can name the right subject even after a newer
+        // attestation has moved the mirror on to a different principal.
+        address principal;
         uint256 nonce; // mirror nonce at bind time; a higher mirror nonce means superseded
+        // Set once PrincipalRevoked has been emitted for this ref, so the event
+        // fires exactly once per identityRef and freeze relays cannot be spammed.
+        bool revocationAnnounced;
     }
 
     mapping(bytes32 identityRef => Binding) private _bindings;
+    /// @dev The identityRef currently bound for an agent, so a superseding bind
+    ///      can announce the revocation of the one it displaces.
+    mapping(address agent => bytes32 identityRef) private _currentRefOf;
 
     error UnknownMandate(address agent);
     error AttestationNotCurrent(address agent, uint256 attestationNonce, uint256 mirrorNonce);
     /// @dev The spec's grant/revoke lifecycle is owned by VAR's attestor flow
     ///      (DelegationMirror.submitAttestation / revoke), not by this adapter.
     error LifecycleManagedByMirror();
+    error UnknownIdentityRef(bytes32 identityRef);
+    error RevocationAlreadyAnnounced(bytes32 identityRef);
+    error PrincipalStillEligible(bytes32 identityRef);
+    /// @dev Binding is only meaningful for a mandate that is live right now.
+    error MandateNotLive(address agent, ReasonCode reason);
 
     constructor(DelegationMirror mirror_) {
         mirror = mirror_;
@@ -74,9 +89,75 @@ contract VARComplianceProviderAdapter is IComplianceProvider {
         if (m.nonce != a.nonce || m.principal != a.principal) {
             revert AttestationNotCurrent(a.agent, a.nonce, m.nonce);
         }
+        // DelegationMirror.revoke sets `revoked` but leaves `nonce` untouched,
+        // so the nonce test above does NOT reject a revoked mandate. Without
+        // this an already-dead mandate could be (re)bound, emitting
+        // PrincipalGranted for an ineligible principal and clearing the
+        // revocationAnnounced latch so PrincipalRevoked could fire twice —
+        // exactly the confusion a freeze relay must not be fed.
+        if (m.revoked) revert MandateNotLive(a.agent, ReasonCode.ATTESTATION_REVOKED);
+        if (block.timestamp >= m.expiry) revert MandateNotLive(a.agent, ReasonCode.KYC_EXPIRED);
+
         identityRef = identityRefFor(a);
-        _bindings[identityRef] = Binding({agent: a.agent, nonce: a.nonce});
+
+        // Binding a fresh attestation displaces whatever ref was current for
+        // this agent. Reaching here means the mirror already moved to a higher
+        // nonce, so the displaced ref is ineligible as of now: announce it,
+        // otherwise a freeze relay watching PrincipalRevoked never learns.
+        bytes32 prior = _currentRefOf[a.agent];
+        if (prior != bytes32(0) && prior != identityRef) {
+            _announceRevocation(prior, ReasonCode.ATTESTATION_REVOKED);
+        }
+
+        _bindings[identityRef] =
+            Binding({agent: a.agent, principal: a.principal, nonce: a.nonce, revocationAnnounced: false});
+        _currentRefOf[a.agent] = identityRef;
         emit PrincipalGranted(a.principal, identityRef);
+    }
+
+    /// @notice Announce that a bound identityRef has become ineligible, emitting
+    ///         the spec's PrincipalRevoked with the ReasonCode that
+    ///         checkPrincipal now returns.
+    ///
+    ///         Permissionless and idempotent-by-revert. This exists because
+    ///         VAR's ineligibility transitions (DelegationMirror.revoke, mandate
+    ///         expiry, supersession by a newer attestation) happen in the mirror,
+    ///         not in this adapter, so no adapter call site observes them
+    ///         synchronously. ERC-8226 Security Considerations recommends a
+    ///         freeze relay that monitors PrincipalRevoked and calls freezeAgent;
+    ///         without this entry point that relay would never fire when pointed
+    ///         at this provider.
+    ///
+    ///         NOTE: this makes the event reachable, not automatic. The
+    ///         authoritative answer is always the live checkPrincipal read
+    ///         (which is why GatedUSDRams re-checks on the execution path and
+    ///         needs no relay at all). A relay that wants push notification must
+    ///         either watch DelegationMirror's own Revoked/Delegated events or
+    ///         poke this function.
+    /// @return reason The ReasonCode reported in the emitted event.
+    function syncRevocation(bytes32 identityRef) external returns (ReasonCode reason) {
+        Binding memory b = _bindings[identityRef];
+        if (b.agent == address(0)) revert UnknownIdentityRef(identityRef);
+        if (b.revocationAnnounced) revert RevocationAlreadyAnnounced(identityRef);
+
+        bool eligible;
+        (eligible, reason,) = _evaluate(identityRef, b.principal);
+        if (eligible) revert PrincipalStillEligible(identityRef);
+
+        _announceRevocation(identityRef, reason);
+    }
+
+    /// @dev Emits PrincipalRevoked once per identityRef and latches it.
+    function _announceRevocation(bytes32 identityRef, ReasonCode reason) private {
+        Binding storage b = _bindings[identityRef];
+        if (b.agent == address(0) || b.revocationAnnounced) return;
+        b.revocationAnnounced = true;
+        emit PrincipalRevoked(b.principal, identityRef, reason);
+    }
+
+    /// @notice Whether PrincipalRevoked has already been emitted for a ref.
+    function revocationAnnounced(bytes32 identityRef) external view returns (bool) {
+        return _bindings[identityRef].revocationAnnounced;
     }
 
     /// @inheritdoc IComplianceProvider
@@ -86,6 +167,17 @@ contract VARComplianceProviderAdapter is IComplianceProvider {
     ///      and at the asset layer.
     function checkPrincipal(address principal, bytes32 identityRef)
         external
+        view
+        returns (bool eligible, ReasonCode reason, uint48 expiresAt)
+    {
+        return _evaluate(identityRef, principal);
+    }
+
+    /// @dev Single evaluation used by both the external read and the
+    ///      PrincipalRevoked announcement, so the emitted ReasonCode can never
+    ///      drift from the one checkPrincipal reports.
+    function _evaluate(bytes32 identityRef, address principal)
+        private
         view
         returns (bool eligible, ReasonCode reason, uint48 expiresAt)
     {
