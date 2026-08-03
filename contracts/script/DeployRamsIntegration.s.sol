@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Script} from "forge-std/Script.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 import {console2} from "forge-std/console2.sol";
 import {DelegationMirror} from "../src/DelegationMirror.sol";
 import {GatedUSDRams} from "../src/GatedUSDRams.sol";
@@ -24,7 +25,7 @@ import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 ///     --rpc-url $ETH_SEPOLIA_RPC_URL --broadcast
 ///
 /// Env:
-///   DEPLOYER_PRIVATE_KEY   deployer key (never logged)
+///   SEPOLIA_DEPLOYER_PRIVATE_KEY  Sepolia-only deployer key (never logged)
 ///   RAMS_REGISTRY          override the AgentMandate address (default: live)
 ///   OWNER_MULTISIG         optional; receives mirror+token ownership
 ///
@@ -40,8 +41,16 @@ contract DeployRamsIntegration is Script {
     address internal constant LIVE_COMPLIANCE_PROVIDER = 0xa90D2503D5D9b80ECC27856Ff76F892B8C02f278;
     address internal constant LIVE_AGENT_EXECUTOR = 0xc81949Cf5b52BDc7890Fd5040A9Cd0cdb4B59952;
 
+    /// The Arc mirror owner / proveHappyPath principal. Deploying Sepolia from
+    /// this key would extend a single key's authority to a third chain and make
+    /// repo-brief.md 8.3 (role concentration) worse, while we publish a review
+    /// criticising exactly that. Refuse it.
+    address internal constant FORBIDDEN_DEPLOYER = 0x54E7B896Fe9a5f6A55551Bb4D15A4f1175891dec;
+
     function run() external {
-        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        // Dedicated Sepolia key. Deliberately NOT DEPLOYER_PRIVATE_KEY.
+        uint256 deployerKey = vm.envUint("SEPOLIA_DEPLOYER_PRIVATE_KEY");
+        require(vm.addr(deployerKey) != FORBIDDEN_DEPLOYER, "use a Sepolia-only key, not the Arc mirror owner");
         IAgentMandate registry = IAgentMandate(vm.envOr("RAMS_REGISTRY", DEFAULT_RAMS_REGISTRY));
 
         require(block.chainid == 11155111, "target Ethereum Sepolia (see verification-status.md)");
@@ -63,6 +72,18 @@ contract DeployRamsIntegration is Script {
         vm.stopBroadcast();
 
         _sanity(registry, mirror, token, adapter);
+
+        // A dry run deploys into the simulation EVM and gets real-looking
+        // addresses that exist nowhere on chain. Writing those into the shared
+        // address book is how a false "we deployed" claim gets manufactured, so
+        // only persist when we are actually broadcasting.
+        if (!vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) {
+            console2.log("DRY RUN: address book NOT written (re-run with --broadcast to persist)");
+            console2.log("would-be DelegationMirror:    ", address(mirror));
+            console2.log("would-be GatedUSDRams:        ", address(token));
+            console2.log("would-be adapter:             ", address(adapter));
+            return;
+        }
 
         // addresses.json gains an "eth-sepolia" section; the Arc entries at the
         // top level are left untouched.
