@@ -11,8 +11,9 @@ verified against the live Ethereum Sepolia deployment
 git clone <this repo> && cd verified-agent-rails
 git submodule update --init --recursive
 
-# 1. Full suite: 63 pre-existing VAR tests + 36 RAMS integration tests
-cd contracts && forge test
+# 1. Full suite: 63 pre-existing VAR tests + 51 RAMS integration tests = 114.
+#    The 5 fork tests require a Sepolia RPC and FAIL (not skip) without one.
+cd contracts && ETH_SEPOLIA_RPC_URL=<any sepolia rpc> forge test
 
 # 2. The compromised-key demo, with narration
 forge test --match-contract CompromisedKeyDemo -vv

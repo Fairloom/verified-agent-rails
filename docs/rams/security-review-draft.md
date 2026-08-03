@@ -1,6 +1,10 @@
 # ERC-8226 deployed contracts — security review notes
 
 **Status: DRAFT — private. Not for distribution before the Brickken team has seen it.**
+**Distribution: 2026-08-03 — Brickken (Thamer) has explicitly asked to read this review
+before anything goes public.** That request satisfies the condition above for sharing it
+*with them*; it does not lift the embargo for anyone else. Public discussion still waits
+until they have read it and responded. Record the send date here when it goes.
 **Tone: peer implementer.** We built a token-side integration against these
 contracts (see `INTEGRATION.md`); these notes are what we verified and what we
 would want to know if the deployment were ours.

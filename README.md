@@ -8,7 +8,7 @@ ERC-8004 says who the agent is. ERC-8226 (RAMS) says what it was mandated to do.
 
 - **Live on Arc testnet (5042002)** — the original VAR stack: `GatedUSD` + `DelegationMirror`, attestor-signed EIP-712 mandates, personhood-rooted principals.
 - **First independent ERC-8226 token-side integration** — `GatedUSDRams` enforces Brickken's Regulated Agent Mandate registry (live on Ethereum Sepolia) in the token's own transfer path, and closes both gaps the spec admits. See [the integration guide](docs/rams/INTEGRATION.md).
-- **104 Foundry tests** — unit, fuzz, invariant, a narrated compromised-key demo, and fork tests that run against the live RAMS deployment.
+- **114 Foundry tests** — unit, fuzz, invariant, a narrated compromised-key demo, and fork tests that run against the live RAMS deployment. The fork tests are not optional: without `ETH_SEPOLIA_RPC_URL` the suite fails rather than skipping.
 
 ---
 
@@ -35,7 +35,7 @@ docs/rams/           ERC-8226 verification trail, integration guide, security re
 git clone <repo> && cd verified-agent-rails
 git submodule update --init --recursive
 
-cd contracts && forge test        # 99 passing (+5 fork tests, skipped without an RPC)
+cd contracts && ETH_SEPOLIA_RPC_URL=<any sepolia rpc> forge test   # 114 passing, 0 skipped
 
 # the compromised-key demo, with narration
 forge test --match-contract CompromisedKeyDemo -vv
@@ -98,21 +98,36 @@ A [draft security review](docs/rams/security-review-draft.md) of the live deploy
 
 ---
 
-## Proven live on Arc (chainId 5042002)
+## Deployed on Arc (chainId 5042002)
 
-Grant, pay, and revoke below are settled Arc transactions signed by the real attestor key and the agent's real Dynamic MPC wallet. No mocks on the enforcement path.
+The VAR stack is deployed on Arc testnet and its state is readable right now. Every
+claim below is a live read you can reproduce; nothing here is quoted from a past run.
 
-| Step | Result | On-chain |
+| What | Value | Reproduce |
 |---|---|---|
-| Grant mandate (attestor-signed EIP-712) | AttestationSubmitted + Delegated, cap 10/tx, period cap 15, 1h window | tx 0xcd81d357… |
-| Agent pays a service, under cap | settled, ServiceSink.Paid fired, agent 50 to 40, sink 0 to 10 | tx 0x537e1c08… |
-| Agent tries to exceed cumulative cap (10+10 > 15) | BLOCKED, OVER_PERIOD_CAP, no funds moved | gate verdict (checkTransfer view; revert covered by the test suite) |
-| Agent tries to exceed per-tx cap (11 > 10) | BLOCKED, OVER_CAP, no funds moved | gate verdict (checkTransfer view; revert covered by the test suite) |
-| Human revokes, next transfer blocked | Revoked event, gate then returns REVOKED | tx 0x11443139… |
+| DelegationMirror | `0xAb47D44cb44d5F5b56E6AB976425cE7c861Cd100` (block 46942616) | `cast code <addr> --rpc-url $ARC_TESTNET_RPC_URL` |
+| GatedUSD | `0x88b5421Ed0e784A21aBfF121B1a77bd76E9115c3` (block 46942616) | ditto |
+| Demo agent | `0x69e170Dd3B22f7C68cDDc31fb402b20f50eDcC54` | `cast call $MIRROR "getMandate(address)" $AGENT` |
+| Its mandate | principal `0x18e5B7AF…2110`, cap 10 gUSD/tx, period cap 100 gUSD / 24h, nonce 5, `revoked=false` | ditto |
+| **Its current verdict** | **`(false, "EXPIRED")`** — the mandate expired 2026-07-21 14:46 UTC | `cast call $MIRROR "checkTransfer(address,address,uint256)(bool,bytes32)" $AGENT $GUSD 1000000` |
 
-The whole compliance decision is a single on-chain VIEW call (`checkTransfer`) on the hot path. No paymaster, no relayer, no off-chain trust on the spend path.
+The compliance decision is a single on-chain VIEW call (`checkTransfer`) on the hot
+path. No paymaster, no relayer, no off-chain trust on the spend path.
 
-Contract addresses for both chains live in [`shared/addresses.json`](shared/addresses.json): the Arc stack at the top level, the Ethereum Sepolia RAMS section under `eth-sepolia`. A known-good pre-enforcement Arc deployment is preserved at the `proven-live-v1` git tag.
+**The demo is not spending today** — the mandate above is expired, and the gate says so.
+Re-running the demo requires a fresh attestation with a higher nonce.
+
+> A previous version of this section was a "Proven live on Arc" table citing five demo
+> transactions. It has been removed: the hashes were recorded truncated to 8 hex
+> characters, appear nowhere else in the repo, and cannot be verified; two of its five
+> rows were `checkTransfer` view results rather than transactions at all; and its stated
+> parameters (period cap 15, 1h window) do not match the live mandate (100, 24h). The
+> enforcement behaviour it described is real and is covered by the test suite — but the
+> table was not evidence for it. A known-good pre-enforcement Arc deployment is
+> preserved at the `proven-live-v1` git tag.
+
+Contract addresses for both chains live in [`shared/addresses.json`](shared/addresses.json):
+the Arc stack at the top level, the Ethereum Sepolia RAMS section under `eth-sepolia`.
 
 ---
 
@@ -120,7 +135,9 @@ Contract addresses for both chains live in [`shared/addresses.json`](shared/addr
 
 ```sh
 cd contracts
-forge test                                    # everything local: 99 tests
+ETH_SEPOLIA_RPC_URL=… forge test              # the whole suite: 114 tests, 0 skipped
+forge test --no-match-contract RamsForkTest   # local only, 109 tests — excludes the
+                                              # 5 live-registry tests, deliberately
 forge test --match-path 'test/rams/*'         # ERC-8226 integration suites
 forge test --match-contract CompromisedKeyDemo -vv
 ETH_SEPOLIA_RPC_URL=… forge test --match-contract RamsForkTest -vv

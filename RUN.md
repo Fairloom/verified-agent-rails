@@ -23,7 +23,11 @@ npm install
 ## Contracts: test
 
 ```sh
-cd contracts && forge test          # 54 passing
+# The 5 fork tests require a Sepolia RPC and FAIL (not skip) without one.
+cd contracts && ETH_SEPOLIA_RPC_URL=<any sepolia rpc> forge test   # 114 passing, 0 skipped
+
+# Local only, excluding the live-registry tests — deliberate and visible:
+cd contracts && forge test --no-match-contract RamsForkTest        # 109 passing
 ```
 
 ## Contracts: deploy to Arc (writes shared/addresses.json)
