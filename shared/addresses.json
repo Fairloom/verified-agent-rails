@@ -20,9 +20,18 @@
     "AgentExecutor": "0xc81949Cf5b52BDc7890Fd5040A9Cd0cdb4B59952",
     "AgentMandate": "0xD68E1bb972cA4EF7F5764FBf6d685a6DfC26778e",
     "ComplianceProvider": "0xa90D2503D5D9b80ECC27856Ff76F892B8C02f278",
-    "DelegationMirror": null,
-    "GatedUSDRams": null,
-    "VARComplianceProviderAdapter": null,
+    "DelegationMirror": {
+      "address": "0x415e267C3C2B1835667b4aDda731599a4B847A3b",
+      "deployBlock": 11411018
+    },
+    "GatedUSDRams": {
+      "address": "0xd501D68214503Fa03B5179F556029CD15D7f7cAa",
+      "deployBlock": 11411019
+    },
+    "VARComplianceProviderAdapter": {
+      "address": "0x7302C8ee3E3f53cD85E0BAF1bDe8479DD19575EB",
+      "deployBlock": 11411020
+    },
     "chainId": 11155111
   }
 }

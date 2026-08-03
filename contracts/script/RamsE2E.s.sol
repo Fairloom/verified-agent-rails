@@ -127,6 +127,9 @@ contract RamsE2E is Script {
         require(blockedReason == c.token.RAMS_OVER_TX_CAP(), "RamsBlocked carried the wrong reason");
         console2.log("BLOCKED: RamsBlocked(agent, holder, RAMS_OVER_TX_CAP), no funds moved");
 
+        // --gas-limit is REQUIRED: cast estimates gas first, estimation reverts
+        // with RamsBlocked, and cast then refuses to send. An explicit limit
+        // bypasses estimation so the revert actually lands as a status-0 receipt.
         console2.log("To land a real reverted tx for the receipt, run:");
         console2.log(
             string.concat(
@@ -136,7 +139,7 @@ contract RamsE2E is Script {
                 vm.toString(c.principal),
                 " ",
                 vm.toString(c.sink),
-                " 101000000 --private-key $AGENT_KEY --rpc-url $ETH_SEPOLIA_RPC_URL"
+                " 101000000 --private-key $AGENT_KEY --rpc-url $ETH_SEPOLIA_RPC_URL --gas-limit 250000"
             )
         );
     }

@@ -5,7 +5,10 @@
 **Trigger:** Brickken (Thamer) confirmed our findings and answered the `recordExecution`
 authorization question that was blocking the end-to-end test.
 
-**Status: phases 1–4 and 6 green. Phase 5 BLOCKED on two missing credentials.**
+**Status: ALL SIX PHASES GREEN. Phase 5 executed 2026-08-03; the integration is
+live on Ethereum Sepolia and has settled real transactions against Brickken's
+registry.** (Sections below marked "BLOCKED" were written before the run and are
+superseded by §5-LIVE.)
 
 Every claim below points to a file, line, test name, or transaction hash, with the exact
 command used. Zero-result searches were validated against a known-present control term.
@@ -368,6 +371,136 @@ grants/revokes** (§1.3), read from their registry's event log.
 
 ---
 
+## §5-LIVE — Phase 5 EXECUTED, 2026-08-03
+
+Supersedes the "Phase 5 — BLOCKED" section above. Both blockers were resolved:
+`ETHERSCAN_API_KEY` and `ETH_SEPOLIA_RPC_URL` were supplied (they live in
+`agent/.env`, not `contracts/.env`), and the dedicated deployer was funded with
+0.05 ETH.
+
+### 5L.1 Preflight (all four passed before anything was broadcast)
+
+| # | Check | Result |
+|---|---|---|
+| 1 | RPC chain id | `11155111` |
+| 2 | Deployer `0x6aB89F85cA075595d94BB0Be545ff54eE796c8fC` | `0.05 ETH`, nonce 0 |
+| 3 | Etherscan V2 key against a known-verified contract | `status 1 OK`, `AgentMandate`, `v0.8.30+commit.73712a01` |
+| 4 | Deploy script refuses `0x54E7B896…1dec` | reverted `use a Sepolia-only key, not the Arc mirror owner` |
+
+**Preflight 3 also closed a long-standing open item.** All three of Brickken's
+contracts are confirmed Etherscan-verified via API, not the web UI:
+`AgentMandate`, `ComplianceProvider`, `AgentExecutor`, all
+`v0.8.30+commit.73712a01`. The standing instruction "do not repeat
+Etherscan-verified" is lifted.
+
+### 5L.2 Deployment — Ethereum Sepolia (11155111)
+
+Deployed with `--broadcast --slow`. All status `0x1`.
+
+| Contract | Address | Deploy tx | Block | Gas |
+|---|---|---|---|---|
+| DelegationMirror | `0x415e267C3C2B1835667b4aDda731599a4B847A3b` | `0x20883526bfc9de3b47ee81aaf0da0b10ba7143742f57149b2a1eb45142dca96c` | 11411018 | 1,637,154 <!-- pragma: allowlist secret -->|
+| **GatedUSDRams** | `0xd501D68214503Fa03B5179F556029CD15D7f7cAa` | `0x4ec0afcb1a86d68ac3da6f4ae5f7428d35667524f224648c375c510c9e17af7a` | 11411019 | 1,708,363 <!-- pragma: allowlist secret -->|
+| **VARComplianceProviderAdapter** | `0x7302C8ee3E3f53cD85E0BAF1bDe8479DD19575EB` | `0x8b5febd3b498db23d35ebfe69d1a13b8de5ac80f15d6666dd96c73183c0b1309` | 11411020 | 1,682,667 <!-- pragma: allowlist secret -->|
+
+Wiring confirmed by live `cast call`, not from the broadcast artifact:
+`token.rams()` = `0xD68E1bb9…6778e` (Brickken's registry), `token.mirror()` =
+our mirror, `strictMandates()` = `true`,
+`token.supportsInterface(0x01ffc9a7)` = `true` (the ERC-165 added this run),
+`adapter.supportsInterface(0xfa2a39b3)` = `true`.
+
+**Verified on Etherscan** (confirmed by API, not just the CLI's word):
+- https://sepolia.etherscan.io/address/0xd501D68214503Fa03B5179F556029CD15D7f7cAa#code
+- https://sepolia.etherscan.io/address/0x7302C8ee3E3f53cD85E0BAF1bDe8479DD19575EB#code
+- https://sepolia.etherscan.io/address/0x415e267C3C2B1835667b4aDda731599a4B847A3b#code
+
+### 5L.3 A second off-by-N in deployBlock, same root cause as the Arc one
+
+The deploy script wrote `deployBlock: 11411016` for all three contracts. The
+receipts say **11411018 / 11411019 / 11411020**. Root cause: `block.number`
+inside a forge script is the *simulation's* block, not the mined one — which is
+also the origin of the Arc `46942608` vs `46942616` discrepancy corrected in
+Phase 6. `addresses.json` was corrected from `cast receipt` output,
+independently of the broadcast artifact. **Any future deploy needs the same
+post-hoc reconciliation; do not trust the script's deployBlock.**
+
+### 5L.4 End-to-end against their live registry
+
+All status `0x1`.
+
+| Step | Transaction | Block |
+|---|---|---|
+| `setAttestor` | `0xc34e94d3a8e2b212084a28d70ab711e4b7857a2867941b29839a556e00525bff` | 11411035 <!-- pragma: allowlist secret -->|
+| `submitAttestation` | `0x67c9fd0ff338b32eef9b05dd57b0be2cfe0c16cb1ec2c3abbf541709053b32fe` | 11411036 <!-- pragma: allowlist secret -->|
+| `bindIdentity` | `0x7607ac7895374084a24adae6239081eac35c1916980fb31b934837ec50323fc0` | 11411037 <!-- pragma: allowlist secret -->|
+| **`submitPersonhood`** | `0xf1aeca4274a2f39d1a18f12ecd224f87d3178507b19f826220f057d30a67c160` | 11411038 <!-- pragma: allowlist secret -->|
+| `faucetMint` | `0x63e2fead4416063b9302589fa8cba2a00206974b528fd3d761cc85c069992fb3` | 11411039 <!-- pragma: allowlist secret -->|
+| `approve` | `0x96001be8bf7a14035ec54960b90ae9df647228433f9b9ee8f7ccbc5355b96f65` | 11411040 <!-- pragma: allowlist secret -->|
+| agent gas top-up | `0xc766e4204169c5a02ee3a21f1c3f1301dad9163581d2ef3e3c50963636d91033` | 11411041 <!-- pragma: allowlist secret -->|
+| **`grantMandate` (THEIR registry, our adapter as complianceProvider)** | `0xe5dfe2fbf900d41e0122743bf7a36ab7c4b1bfdd4aa82af6ee3a9ebd9b78ec54` | 11411043 <!-- pragma: allowlist secret -->|
+| **`transferFrom` (cleared; hits their canExecute + recordExecution)** | `0x796a690853f9c79b71c6dd52892c9e42da447eac9a08fca7329528236869ec6c` | 11411044 <!-- pragma: allowlist secret -->|
+
+Principal `0x6aB89F85cA075595d94BB0Be545ff54eE796c8fC`,
+agent `0x0358da4d5d9324556b3fCA2c5e7fcDeb5612CF29`,
+sink `0x651e2Cb8CC62334D46b8378534f0AE0F1A2eD3Ae`.
+
+`adapter.checkPrincipal` returned `eligible = true, reason = 0 (COMPLIANT)`
+**through the personhood layer added this run** — the mandate could not have
+been granted otherwise, because `grantMandate` reverts `PrincipalNotEligible`
+on a false verdict.
+
+### 5L.5 THE READBACK — the proof, not the receipt
+
+Read from Brickken's `AgentMandate` at `0xD68E1bb9…6778e` with `cast call`:
+
+```
+cumulativeUsed @ block 11411043 (after grant, before transfer) : 0
+cumulativeUsed @ latest                                        : 90000000   (90 gUSD)
+```
+
+Corroborated by token balances: sink `90000000`, principal `910000000`
+(1000 − 90).
+
+**And the claim under review, proven on-chain:**
+
+```
+hasRole(RECORDER_ROLE, 0xd501D68214503Fa03B5179F556029CD15D7f7cAa) = false
+```
+
+Our token holds **no recorder role**, so their `recordExecution` can only have
+accepted it on the `msg.sender == m.asset` branch. Brickken's written answer is
+now confirmed by a settled transaction, not just by bytecode reading.
+
+### 5L.6 The blocked case, as a real reverted receipt
+
+Live diagnostic before sending:
+`canTransferBy(agent, principal, 101e6)` →
+`(false, 0x52414d535f4f5645525f54585f434150…)` = **`RAMS_OVER_TX_CAP`**.
+
+| Item | Value |
+|---|---|
+| Transaction | `0xdfd1877a8e5fed2c910f9ec0bcab93c8409d015ff38ea2cb80feb40931f51d74` <!-- pragma: allowlist secret -->|
+| Block | 11411052 |
+| **Status** | **`0x0` — reverted, which is the point** |
+| Gas used | 61,896 |
+| Revert | `RamsBlocked(0x0358da4d…CF29, 0x6aB89F85…c8fC, RAMS_OVER_TX_CAP)` |
+
+Post-state confirms nothing moved: `cumulativeUsed` still `90000000`, sink
+balance still `90000000`.
+
+**Note:** `cast send` alone will NOT land this — it estimates gas first,
+estimation reverts with `RamsBlocked`, and cast refuses to send. `--gas-limit`
+is required to bypass estimation. The script's printed command was corrected to
+include it.
+
+### 5L.7 Cost
+
+Deployer went `0.05` → `0.039667315561144216` ETH. **Total spend ≈ 0.01033 ETH**
+for three deployments, nine end-to-end transactions and one deliberate revert,
+at ~1 gwei.
+
+---
+
 ## Phase 6 — doc corrections
 
 | Correction | Status | Evidence |
@@ -463,14 +596,50 @@ Breakdown: 63 pre-existing VAR tests + 51 RAMS integration tests
 
 **Still NOT claimable — do not say these:**
 
-- ❌ **Anything involving a live transaction of ours on Sepolia.** Nothing is deployed;
-  no `cumulativeUsed` readback exists; no blocked-case demonstration exists. Every
-  interaction of ours remains fork-local (§5).
-- ❌ **"Etherscan-verified" / "Exact Match"** for their contracts (§5.1).
-- ❌ **That our compliance provider performs a personhood check.** It does not — at all
-  (§4.1).
-- ❌ **That the granting-API weakness (§8.1) is fixed or being fixed.** It is live and
-  unfixed, and it is load-bearing for the adapter's verdict (§4.2).
 - ❌ **The old "Proven live on Arc" table** (§6).
 - ❌ **Full `IComplianceProvider` lifecycle conformance** — `grantPrincipal` and
   `revokePrincipal` revert by design (§3.4).
+- ❌ **"Trustlessly World-ID-verified on-chain."** Personhood is *attested and
+  enforced at evaluation time*, not proven. AgentBook is on World Chain mainnet and no
+  canonical root of 480 exists on Sepolia (§4.3).
+- ❌ **That the deployment is authenticated.** §8.1's headline defect is fixed for
+  `/api/var/grant`, but `/api/var/pay`, `/api/var/create-agent` and `/api/var/fund-gas`
+  still carry only the Origin guard, and `fund-gas` holds `GAS_FUNDER_PRIVATE_KEY`.
+- ❌ **That any of this is production-grade.** §8.2 stands: single attestor key,
+  single owner EOA, no multisig, no timelock.
+
+---
+
+## NEWLY CLAIMABLE AFTER THE 2026-08-03 LIVE RUN
+
+Everything in this block was impossible to say an hour before it.
+
+1. **"Our contract calls their `canExecute` and their `recordExecution` on a live
+   chain, and here is the transaction."** `0x796a6908…ec6c`, block 11411044. This is
+   the single fact previously identified as worth more than the rest of the branch. It
+   now exists.
+
+2. **"`cumulativeUsed` moved on Brickken's registry: 0 → 90000000."** Read back with
+   `cast call` against `0xD68E1bb9…6778e` (§5L.5). The readback, not the receipt.
+
+3. **"A RAMS-aware token needs no `RECORDER_ROLE`, and we proved it in production."**
+   `hasRole(RECORDER_ROLE, our token) = false` at the same block the recording
+   succeeded. Brickken's written answer is confirmed by settled state.
+
+4. **"Our provider enforces World ID personhood at evaluation time, on-chain."**
+   `submitPersonhood` at `0xf1aeca42…c160`; `checkPrincipal` returned COMPLIANT
+   through that layer, and `grantMandate` would have reverted otherwise. State it as
+   *attested*, never as *trustless*.
+
+5. **"Both contracts are deployed and source-verified on Sepolia"**, with the two
+   Etherscan URLs (§5L.2).
+
+6. **"One cleared, one blocked with a machine-readable reason, both on-chain."**
+   `0xdfd1877a…1d74`, block 11411052, **status 0x0**, `RamsBlocked(…, RAMS_OVER_TX_CAP)`
+   — and nothing moved.
+
+7. **"Brickken's three contracts are Etherscan-verified"** — now confirmed by API
+   (§5L.1). The previous standing caution is lifted.
+
+8. **"§8.1's granting-API defect is fixed"** — for `/api/var/grant` only, with the
+   sibling routes explicitly still open.
