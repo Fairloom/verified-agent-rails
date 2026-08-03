@@ -28,7 +28,7 @@ import {
   DelegationMirrorAbi,
   parseUSDC,
 } from "@var/shared";
-import { crossOriginBlocked, principalProofInvalid } from "@/lib/sameOrigin";
+import { ACTION_GRANT, crossOriginBlocked, proofOfControlInvalid } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
 
@@ -89,14 +89,19 @@ export async function POST(req: Request) {
   // Finding 8.1: prove the caller controls `principal` before signing anything
   // with the attestor key. verifyMessage handles EOAs and (via ERC-1271)
   // contract wallets, which matters because Dynamic MPC wallets are used here.
-  const proofFailed = await principalProofInvalid(
+  const proofFailed = await proofOfControlInvalid(
     {
-      agent,
-      principal,
-      spendCap,
-      expiryMinutes,
+      expectedSigner: principal,
+      action: ACTION_GRANT,
+      fields: [
+        ["agent", agent.toLowerCase()],
+        ["principal", principal.toLowerCase()],
+        ["spendCap", spendCap],
+        ["expiryMinutes", String(expiryMinutes)],
+      ],
       issuedAt: body.issuedAt,
-      principalSignature: body.principalSignature,
+      signature: body.principalSignature,
+      role: "principal",
     },
     ({ address, message, signature }) =>
       createPublicClient({

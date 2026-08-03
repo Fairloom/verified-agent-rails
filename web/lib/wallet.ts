@@ -52,23 +52,32 @@ async function clientFor(primaryWallet: Wallet | null) {
   return { walletClient, account };
 }
 
-// Prove control of the principal address before the server will sign a mandate
-// for it (finding 8.1). The connected wallet IS the principal in the dashboard
-// flow, so this is a single signature over the exact grant terms.
-export async function signGrantStatement(
+// Prove control of an address before the server acts with a key it holds
+// (finding 8.1). The connected wallet is the principal in the dashboard flow.
+//
+// The action string is part of the signed bytes, so a signature captured from
+// one route cannot be replayed against another. Field order must match
+// web/lib/sameOrigin.ts varStatement exactly.
+export const ACTION_GRANT = "authorize a mandate";
+export const ACTION_PAY = "authorize an agent payment";
+export const ACTION_FUND_GAS = "authorize a gas top-up";
+export const ACTION_CREATE_AGENT = "authorize agent creation";
+
+export async function signVarStatement(
   primaryWallet: Wallet | null,
-  p: { agent: string; principal: string; spendCap: string; expiryMinutes: number; issuedAt: number },
+  action: string,
+  fields: Array<[string, string]>,
+  issuedAt: number,
 ): Promise<Hex> {
   const { walletClient, account } = await clientFor(primaryWallet);
-  const message = [
-    "VAR: authorize a mandate",
-    `agent: ${p.agent.toLowerCase()}`,
-    `principal: ${p.principal.toLowerCase()}`,
-    `spendCap: ${p.spendCap}`,
-    `expiryMinutes: ${p.expiryMinutes}`,
-    `issuedAt: ${p.issuedAt}`,
-  ].join("\n");
+  const message = [`VAR: ${action}`, ...fields.map(([k, v]) => `${k}: ${v}`), `issuedAt: ${issuedAt}`].join("\n");
   return walletClient.signMessage({ account, message });
+}
+
+/** The address the dashboard signs as; also the principal it names. */
+export async function signerAddress(primaryWallet: Wallet | null): Promise<Address> {
+  const { account } = await clientFor(primaryWallet);
+  return account.address;
 }
 
 // Relay a server-signed attestation. submitAttestation is permissionless, so the

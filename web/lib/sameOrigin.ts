@@ -55,40 +55,46 @@ export function crossOriginBlocked(req: Request): NextResponse | null {
 // different terms.
 export const GRANT_STATEMENT_WINDOW_MS = 5 * 60 * 1000;
 
-export function grantStatement(p: {
-  agent: string;
-  principal: string;
-  spendCap: string;
-  expiryMinutes: number;
-  issuedAt: number;
-}): string {
-  return [
-    "VAR: authorize a mandate",
-    `agent: ${p.agent.toLowerCase()}`,
-    `principal: ${p.principal.toLowerCase()}`,
-    `spendCap: ${p.spendCap}`,
-    `expiryMinutes: ${p.expiryMinutes}`,
-    `issuedAt: ${p.issuedAt}`,
-  ].join("\n");
+// The statement a caller signs. The ACTION is part of the signed bytes, so a
+// signature captured from one route cannot be replayed against another -- a
+// gas-top-up signature is not a payment authorisation. Field order is fixed and
+// must match web/lib/wallet.ts exactly; a mismatch fails every request.
+export function varStatement(action: string, fields: Array<[string, string]>, issuedAt: number): string {
+  return [`VAR: ${action}`, ...fields.map(([k, v]) => `${k}: ${v}`), `issuedAt: ${issuedAt}`].join("\n");
 }
 
-export async function principalProofInvalid(
+export const ACTION_GRANT = "authorize a mandate";
+export const ACTION_PAY = "authorize an agent payment";
+export const ACTION_FUND_GAS = "authorize a gas top-up";
+export const ACTION_CREATE_AGENT = "authorize agent creation";
+
+/**
+ * Require that `expectedSigner` personally signed this exact action with these
+ * exact parameters, recently.
+ *
+ * `verify` is injected so the route supplies its own chain client; viem's
+ * verifyMessage handles EOAs and ERC-1271 contract wallets, which matters
+ * because the dashboard uses Dynamic MPC wallets.
+ */
+export async function proofOfControlInvalid(
   p: {
-    agent: string;
-    principal: string;
-    spendCap: string;
-    expiryMinutes: number;
+    expectedSigner: string;
+    action: string;
+    fields: Array<[string, string]>;
     issuedAt?: number;
-    principalSignature?: string;
+    signature?: string;
+    /** What the signer represents, for the error message. */
+    role?: string;
   },
   verify: (args: { address: `0x${string}`; message: string; signature: `0x${string}` }) => Promise<boolean>,
 ): Promise<NextResponse | null> {
-  if (!p.principalSignature || !/^0x[0-9a-fA-F]+$/.test(p.principalSignature)) {
+  const role = p.role ?? "principal";
+  if (!p.signature || !/^0x[0-9a-fA-F]+$/.test(p.signature)) {
     return NextResponse.json(
       {
         error:
-          "Missing principalSignature. The caller must prove control of `principal` by signing the " +
-          "grant statement; naming an address is not sufficient.",
+          `Missing signature. The caller must prove control of the ${role} by signing the ` +
+          `"${p.action}" statement; naming an address is not sufficient.`,
       },
       { status: 401 },
     );
@@ -96,35 +102,27 @@ export async function principalProofInvalid(
   if (typeof p.issuedAt !== "number" || !Number.isFinite(p.issuedAt)) {
     return NextResponse.json({ error: "Missing or invalid issuedAt." }, { status: 400 });
   }
-  const skew = Math.abs(Date.now() - p.issuedAt);
-  if (skew > GRANT_STATEMENT_WINDOW_MS) {
+  if (Math.abs(Date.now() - p.issuedAt) > GRANT_STATEMENT_WINDOW_MS) {
     return NextResponse.json(
-      { error: "Grant statement expired or clock-skewed; re-sign and retry." },
+      { error: "Statement expired or clock-skewed; re-sign and retry." },
       { status: 401 },
     );
   }
 
-  const message = grantStatement({
-    agent: p.agent,
-    principal: p.principal,
-    spendCap: p.spendCap,
-    expiryMinutes: p.expiryMinutes,
-    issuedAt: p.issuedAt,
-  });
-
+  const message = varStatement(p.action, p.fields, p.issuedAt);
   let ok = false;
   try {
     ok = await verify({
-      address: p.principal as `0x${string}`,
+      address: p.expectedSigner as `0x${string}`,
       message,
-      signature: p.principalSignature as `0x${string}`,
+      signature: p.signature as `0x${string}`,
     });
   } catch {
     ok = false;
   }
   if (!ok) {
     return NextResponse.json(
-      { error: "principalSignature does not recover to `principal`." },
+      { error: `Signature does not recover to the ${role} (${p.expectedSigner}).` },
       { status: 401 },
     );
   }

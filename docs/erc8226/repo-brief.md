@@ -524,14 +524,36 @@ Ranked roughly by how badly they'd land in review.
 > principal's own signature verifies, **an attacker's signature naming that
 > principal is rejected**, and a tampered `spendCap` is rejected.
 >
-> **NOT fixed — do not overclaim.** Requiring an `Origin` header is *not*
-> authentication: `curl -H "Origin: https://<host>"` passes it trivially. The
-> sibling privileged routes named at the end of this section
-> (`/api/var/pay`, `/api/var/create-agent`, `/api/var/fund-gas`) still have
-> **only** that guard, and `fund-gas` holds `GAS_FUNDER_PRIVATE_KEY`. They need
-> the same proof-of-control treatment or a real session before this deployment
-> can be called authenticated. §8.2 (single attestor key, single owner EOA) is
-> untouched and still governs everything downstream.
+> **All four privileged routes now carry proof-of-control** (updated later the
+> same day). The primitive is generalised: the caller signs a statement whose
+> first line is the ACTION, so a signature captured from one route cannot be
+> replayed against another.
+>
+> | Route | Required signer | Bound fields |
+> |---|---|---|
+> | `/api/var/grant` | the named `principal` | agent, principal, spendCap, expiryMinutes |
+> | `/api/var/pay` | the **mandate's** principal, read from the mirror | agent, amount |
+> | `/api/var/fund-gas` | the **mandate's** principal, read from the mirror | agent |
+> | `/api/var/create-agent` | the `owner` it names | owner |
+>
+> `pay` and `fund-gas` bind to the principal recorded on-chain rather than one
+> supplied in the request, so the caller cannot nominate themselves. `pay` puts
+> the amount inside the signed bytes, so a captured signature cannot be reused
+> for a larger spend. `create-agent` has no mandate to bind to — the agent does
+> not exist yet — so it takes the weakest defensible gate: minting is no longer
+> anonymous and is rate-limitable per identity instead of being an open faucet
+> on our Dynamic quota. That is a real limit, not an authorisation.
+>
+> Verified by signature roundtrip, 22 checks: client and server statements are
+> byte-identical for all four actions, the right signer verifies, an attacker's
+> signature is rejected for each, **all twelve cross-route replays are
+> rejected**, and a tampered `pay` amount is rejected.
+>
+> **Still true, do not overclaim.** Requiring an `Origin` header remains *not*
+> authentication — `curl -H "Origin: https://<host>"` passes it trivially; the
+> signature is what authenticates. §8.2 (single attestor key, single owner EOA,
+> no multisig, no timelock) is untouched and still governs everything
+> downstream. None of this makes the deployment production-grade.
 
 `web/app/api/var/grant/route.ts`. The route holds `ATTESTOR_PRIVATE_KEY` and signs an
 EIP-712 attestation on request. Its only gate is `crossOriginBlocked`
