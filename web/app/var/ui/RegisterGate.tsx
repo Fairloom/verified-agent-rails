@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { DynamicWidget } from "@dynamic-labs/sdk-react-core";
+import { DynamicWidget, useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import { getAddress, isAddress, type Address } from "viem";
 import type { ISuccessResult } from "@worldcoin/idkit";
 import {
@@ -13,6 +13,7 @@ import {
   type AgentStatus,
 } from "@/lib/worldid";
 import { shortAddr } from "@/lib/var";
+import { ACTION_CREATE_AGENT, signVarStatement, signerAddress } from "@/lib/wallet";
 
 // World ID modal is browser-only (WASM + window); load it client-side.
 const IDKitWidget = dynamic(() => import("@worldcoin/idkit").then((m) => m.IDKitWidget), {
@@ -64,6 +65,7 @@ export function RegisterGate({
   defaultAgent: Address;
   onEnter: (agent: Address, humanId: string | null, walletId: string | null) => void;
 }) {
+  const { primaryWallet } = useDynamicContext();
   const [agentInput, setAgentInput] = useState<string>(defaultAgent);
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -170,7 +172,22 @@ export function RegisterGate({
     setCreating(true);
     setError(null);
     try {
-      const res = await fetch("/api/var/create-agent", { method: "POST" });
+      // Minting a wallet spends our Dynamic quota, so it cannot be anonymous
+      // (finding 8.1). No mandate exists yet to bind to, so the caller proves
+      // control of the connected wallet and that address is recorded as owner.
+      const owner = await signerAddress(primaryWallet);
+      const issuedAt = Date.now();
+      const signature = await signVarStatement(
+        primaryWallet,
+        ACTION_CREATE_AGENT,
+        [["owner", owner.toLowerCase()]],
+        issuedAt,
+      );
+      const res = await fetch("/api/var/create-agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner, issuedAt, signature }),
+      });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "could not create agent");
       setAgentInput(body.address as string);
@@ -182,7 +199,7 @@ export function RegisterGate({
     } finally {
       setCreating(false);
     }
-  }, []);
+  }, [primaryWallet]);
 
   const busy = phase === "relaying" || phase === "confirming";
   const registered = status?.registered ?? false;

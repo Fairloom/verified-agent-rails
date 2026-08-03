@@ -3,16 +3,50 @@
 // non-idempotent (each call is a new wallet) and sources credentials from
 // web/.env.local. Server-only; secrets never reach the browser.
 import { NextResponse } from "next/server";
-import { getAddress, isAddress } from "viem";
+import { createPublicClient, getAddress, http, isAddress } from "viem";
 import { DynamicEvmWalletClient } from "@dynamic-labs-wallet/node-evm";
 import { ThresholdSignatureScheme } from "@dynamic-labs-wallet/core";
-import { crossOriginBlocked } from "@/lib/sameOrigin";
+import { arcTestnet } from "@var/shared";
+import { ACTION_CREATE_AGENT, crossOriginBlocked, proofOfControlInvalid } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   const blocked = crossOriginBlocked(req);
   if (blocked) return blocked;
+
+  // Finding 8.1. Unlike the other routes there is no mandate to bind to yet --
+  // the agent does not exist. So the weakest defensible gate: the caller must
+  // prove control of the address it names as `owner`. That does not authorise
+  // anything on-chain, but it makes wallet minting non-anonymous and
+  // rate-limitable per identity instead of an open faucet on our Dynamic quota.
+  let body: { owner?: string; issuedAt?: number; signature?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+  if (!body.owner || !isAddress(body.owner)) {
+    return NextResponse.json({ error: "Missing or invalid owner address." }, { status: 400 });
+  }
+  const owner = getAddress(body.owner);
+
+  const unauthorized = await proofOfControlInvalid(
+    {
+      expectedSigner: owner,
+      action: ACTION_CREATE_AGENT,
+      fields: [["owner", owner.toLowerCase()]],
+      issuedAt: body.issuedAt,
+      signature: body.signature,
+      role: "owner",
+    },
+    ({ address, message, signature }) =>
+      createPublicClient({
+        chain: arcTestnet,
+        transport: process.env.ARC_TESTNET_RPC_URL ? http(process.env.ARC_TESTNET_RPC_URL) : http(),
+      }).verifyMessage({ address, message, signature }),
+  );
+  if (unauthorized) return unauthorized;
 
   const environmentId = process.env.DYNAMIC_ENVIRONMENT_ID;
   const apiToken = process.env.DYNAMIC_API_TOKEN ?? process.env.DYNAMIC_AUTH_TOKEN;

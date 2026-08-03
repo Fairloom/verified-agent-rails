@@ -5,7 +5,7 @@
 // without a failed tx, then the agent sends the real payment. This is the
 // "leash holds even if the agent is compromised" demonstration.
 import { NextResponse } from "next/server";
-import { createPublicClient, getAddress, http, isAddress, type Address } from "viem";
+import { createPublicClient, getAddress, http, isAddress, zeroAddress, type Address } from "viem";
 import {
   arcTestnet,
   ADDRESSES,
@@ -17,7 +17,7 @@ import {
   parseUSDC,
 } from "@var/shared";
 import { getAgentSigner } from "@/lib/agentWallet.server";
-import { crossOriginBlocked } from "@/lib/sameOrigin";
+import { ACTION_PAY, crossOriginBlocked, proofOfControlInvalid } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
 
@@ -35,7 +35,13 @@ export async function POST(req: Request) {
   const blocked = crossOriginBlocked(req);
   if (blocked) return blocked;
 
-  let body: { agent?: string; amount?: string; walletId?: string };
+  let body: {
+    agent?: string;
+    amount?: string;
+    walletId?: string;
+    issuedAt?: number;
+    signature?: string;
+  };
   try {
     body = await req.json();
   } catch {
@@ -54,6 +60,37 @@ export async function POST(req: Request) {
 
   const pub = arcPublic();
   try {
+    // 0. Finding 8.1: the on-chain leash caps HOW MUCH this can move, but it
+    //    does not say WHO may move it. Without this an anonymous caller could
+    //    drain the agent's budget to the sink, up to the cap, repeatedly.
+    //    Require the mandate's principal to have signed this exact payment.
+    //    The amount is inside the signed statement, so a captured signature
+    //    cannot be reused for a larger spend.
+    const payMandate = await pub.readContract({
+      address: DELEGATION_MIRROR_ADDRESS,
+      abi: DelegationMirrorAbi,
+      functionName: "getMandate",
+      args: [agent],
+    });
+    if (payMandate.principal === zeroAddress) {
+      return NextResponse.json({ error: "Agent has no mandate; nothing to authorise." }, { status: 403 });
+    }
+    const unauthorized = await proofOfControlInvalid(
+      {
+        expectedSigner: payMandate.principal,
+        action: ACTION_PAY,
+        fields: [
+          ["agent", agent.toLowerCase()],
+          ["amount", amount],
+        ],
+        issuedAt: body.issuedAt,
+        signature: body.signature,
+        role: "mandate principal",
+      },
+      ({ address, message, signature }) => pub.verifyMessage({ address, message, signature }),
+    );
+    if (unauthorized) return unauthorized;
+
     // 1. Ask the mirror's own gate first — authoritative, never reverts.
     const [ok, reasonRaw] = await pub.readContract({
       address: DELEGATION_MIRROR_ADDRESS,

@@ -28,7 +28,7 @@ import {
   DelegationMirrorAbi,
   parseUSDC,
 } from "@var/shared";
-import { crossOriginBlocked } from "@/lib/sameOrigin";
+import { ACTION_GRANT, crossOriginBlocked, proofOfControlInvalid } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
 
@@ -46,6 +46,10 @@ const AGENT_BOOK_ABI = [
 const PRIVATE_KEY_RE = /^0x[0-9a-fA-F]{64}$/;
 
 export async function POST(req: Request) {
+  // This route signs an EIP-712 mandate with a server-held attestor key.
+  // Origin is anti-CSRF only; proof of control over `principal` is checked
+  // below, once the body is parsed. See finding 8.1 in
+  // docs/erc8226/repo-brief.md.
   const blocked = crossOriginBlocked(req);
   if (blocked) return blocked;
 
@@ -57,7 +61,14 @@ export async function POST(req: Request) {
     );
   }
 
-  let body: { agent?: string; principal?: string; spendCap?: string; expiryMinutes?: number };
+  let body: {
+    agent?: string;
+    principal?: string;
+    spendCap?: string;
+    expiryMinutes?: number;
+    issuedAt?: number;
+    principalSignature?: string;
+  };
   try {
     body = await req.json();
   } catch {
@@ -74,6 +85,31 @@ export async function POST(req: Request) {
   const principal = getAddress(body.principal);
   const spendCap = body.spendCap && body.spendCap !== "" ? body.spendCap : "10";
   const expiryMinutes = Number.isFinite(body.expiryMinutes) ? Number(body.expiryMinutes) : 60;
+
+  // Finding 8.1: prove the caller controls `principal` before signing anything
+  // with the attestor key. verifyMessage handles EOAs and (via ERC-1271)
+  // contract wallets, which matters because Dynamic MPC wallets are used here.
+  const proofFailed = await proofOfControlInvalid(
+    {
+      expectedSigner: principal,
+      action: ACTION_GRANT,
+      fields: [
+        ["agent", agent.toLowerCase()],
+        ["principal", principal.toLowerCase()],
+        ["spendCap", spendCap],
+        ["expiryMinutes", String(expiryMinutes)],
+      ],
+      issuedAt: body.issuedAt,
+      signature: body.principalSignature,
+      role: "principal",
+    },
+    ({ address, message, signature }) =>
+      createPublicClient({
+        chain: arcTestnet,
+        transport: process.env.ARC_TESTNET_RPC_URL ? http(process.env.ARC_TESTNET_RPC_URL) : http(),
+      }).verifyMessage({ address, message, signature }),
+  );
+  if (proofFailed) return proofFailed;
 
   try {
     // proofRef from the agent's World Chain identity (raw read; lookupHuman is

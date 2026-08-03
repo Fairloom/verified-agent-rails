@@ -10,6 +10,10 @@ import {
   faucetMintTo,
   relaySubmitAttestation,
   revokeMandate,
+  signVarStatement,
+  ACTION_GRANT,
+  ACTION_PAY,
+  ACTION_FUND_GAS,
   type SignedAttestationWire,
 } from "@/lib/wallet";
 import { WidgetCard } from "./ui/WidgetCard";
@@ -56,10 +60,31 @@ export function VarDashboard() {
     setToast(null);
     try {
       const principal = (primaryWallet?.address as Address | undefined) ?? agent;
+      // Prove control of `principal` before the server signs anything with the
+      // attestor key. Naming an address is not sufficient (finding 8.1).
+      const issuedAt = Date.now();
+      const principalSignature = await signVarStatement(
+        primaryWallet,
+        ACTION_GRANT,
+        [
+          ["agent", agent.toLowerCase()],
+          ["principal", principal.toLowerCase()],
+          ["spendCap", spendCap],
+          ["expiryMinutes", String(Number(expiryMinutes))],
+        ],
+        issuedAt,
+      );
       const res = await fetch("/api/var/grant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent, principal, spendCap, expiryMinutes: Number(expiryMinutes) }),
+        body: JSON.stringify({
+          agent,
+          principal,
+          spendCap,
+          expiryMinutes: Number(expiryMinutes),
+          issuedAt,
+          principalSignature,
+        }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "grant failed");
@@ -75,10 +100,17 @@ export function VarDashboard() {
       if (budget > funds.gusd) {
         await faucetMintTo(primaryWallet, agent, budget - funds.gusd);
       }
+      const gasIssuedAt = Date.now();
+      const gasSignature = await signVarStatement(
+        primaryWallet,
+        ACTION_FUND_GAS,
+        [["agent", agent.toLowerCase()]],
+        gasIssuedAt,
+      );
       const gasRes = await fetch("/api/var/fund-gas", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent }),
+        body: JSON.stringify({ agent, issuedAt: gasIssuedAt, signature: gasSignature }),
       });
       if (!gasRes.ok) {
         const gasBody = await gasRes.json().catch(() => ({}));
@@ -98,10 +130,28 @@ export function VarDashboard() {
     setBusy("pay");
     setToast(null);
     try {
+      // The mandate's principal must authorise this exact payment; the amount
+      // is inside the signed statement (finding 8.1).
+      const payIssuedAt = Date.now();
+      const paySignature = await signVarStatement(
+        primaryWallet,
+        ACTION_PAY,
+        [
+          ["agent", agent.toLowerCase()],
+          ["amount", amount],
+        ],
+        payIssuedAt,
+      );
       const res = await fetch("/api/var/pay", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent, amount, walletId: activeWalletId ?? undefined }),
+        body: JSON.stringify({
+          agent,
+          amount,
+          walletId: activeWalletId ?? undefined,
+          issuedAt: payIssuedAt,
+          signature: paySignature,
+        }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "pay failed");

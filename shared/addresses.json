@@ -1,19 +1,37 @@
 {
   "DelegationMirror": {
     "address": "0xAb47D44cb44d5F5b56E6AB976425cE7c861Cd100",
-    "deployBlock": 46942608
+    "deployBlock": 46942616
   },
   "GatedUSD": {
     "address": "0x88b5421Ed0e784A21aBfF121B1a77bd76E9115c3",
-    "deployBlock": 46942608
+    "deployBlock": 46942616
   },
   "MockYieldVault": {
     "address": "0x746D4A3c3629DAF333c61b8d48B3ea30bC026f0F",
-    "deployBlock": 46942608
+    "deployBlock": 46942616
   },
   "ServiceSink": {
     "address": "0x0B7EfBaeD5f01E54442c26520A728F859EA6a2bd",
-    "deployBlock": 46942608
+    "deployBlock": 46942616
   },
-  "chainId": 5042002
+  "chainId": 5042002,
+  "eth-sepolia": {
+    "AgentExecutor": "0xc81949Cf5b52BDc7890Fd5040A9Cd0cdb4B59952",
+    "AgentMandate": "0xD68E1bb972cA4EF7F5764FBf6d685a6DfC26778e",
+    "ComplianceProvider": "0xa90D2503D5D9b80ECC27856Ff76F892B8C02f278",
+    "DelegationMirror": {
+      "address": "0x415e267C3C2B1835667b4aDda731599a4B847A3b",
+      "deployBlock": 11411018
+    },
+    "GatedUSDRams": {
+      "address": "0xd501D68214503Fa03B5179F556029CD15D7f7cAa",
+      "deployBlock": 11411019
+    },
+    "VARComplianceProviderAdapter": {
+      "address": "0x7302C8ee3E3f53cD85E0BAF1bDe8479DD19575EB",
+      "deployBlock": 11411020
+    },
+    "chainId": 11155111
+  }
 }

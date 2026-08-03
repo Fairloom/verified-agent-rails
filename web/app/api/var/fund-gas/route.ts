@@ -17,7 +17,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { arcTestnet, DELEGATION_MIRROR_ADDRESS, DelegationMirrorAbi } from "@var/shared";
-import { crossOriginBlocked } from "@/lib/sameOrigin";
+import { ACTION_FUND_GAS, crossOriginBlocked, proofOfControlInvalid } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
 
@@ -37,7 +37,7 @@ export async function POST(req: Request) {
     );
   }
 
-  let body: { agent?: string };
+  let body: { agent?: string; issuedAt?: number; signature?: string };
   try {
     body = await req.json();
   } catch {
@@ -67,6 +67,24 @@ export async function POST(req: Request) {
         { status: 403 },
       );
     }
+
+    // Finding 8.1: the mandate's existence bounds WHICH agents can be funded,
+    // but not WHO may trigger it. Without this, anyone could drain the funder
+    // in GAS_TOPUP increments across every mandated agent. Require the
+    // mandate's own principal -- the party that granted the leash and holds the
+    // kill switch -- to have signed this exact request.
+    const unauthorized = await proofOfControlInvalid(
+      {
+        expectedSigner: mandate.principal,
+        action: ACTION_FUND_GAS,
+        fields: [["agent", agent.toLowerCase()]],
+        issuedAt: body.issuedAt,
+        signature: body.signature,
+        role: "mandate principal",
+      },
+      ({ address, message, signature }) => pub.verifyMessage({ address, message, signature }),
+    );
+    if (unauthorized) return unauthorized;
 
     const balance = await pub.getBalance({ address: agent });
     if (balance >= GAS_MIN) {
