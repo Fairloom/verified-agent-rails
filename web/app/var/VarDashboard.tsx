@@ -10,6 +10,7 @@ import {
   faucetMintTo,
   relaySubmitAttestation,
   revokeMandate,
+  signGrantStatement,
   type SignedAttestationWire,
 } from "@/lib/wallet";
 import { WidgetCard } from "./ui/WidgetCard";
@@ -56,10 +57,27 @@ export function VarDashboard() {
     setToast(null);
     try {
       const principal = (primaryWallet?.address as Address | undefined) ?? agent;
+      // Prove control of `principal` before the server signs anything with the
+      // attestor key. Naming an address is not sufficient (finding 8.1).
+      const issuedAt = Date.now();
+      const principalSignature = await signGrantStatement(primaryWallet, {
+        agent,
+        principal,
+        spendCap,
+        expiryMinutes: Number(expiryMinutes),
+        issuedAt,
+      });
       const res = await fetch("/api/var/grant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent, principal, spendCap, expiryMinutes: Number(expiryMinutes) }),
+        body: JSON.stringify({
+          agent,
+          principal,
+          spendCap,
+          expiryMinutes: Number(expiryMinutes),
+          issuedAt,
+          principalSignature,
+        }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "grant failed");

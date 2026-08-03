@@ -52,6 +52,25 @@ async function clientFor(primaryWallet: Wallet | null) {
   return { walletClient, account };
 }
 
+// Prove control of the principal address before the server will sign a mandate
+// for it (finding 8.1). The connected wallet IS the principal in the dashboard
+// flow, so this is a single signature over the exact grant terms.
+export async function signGrantStatement(
+  primaryWallet: Wallet | null,
+  p: { agent: string; principal: string; spendCap: string; expiryMinutes: number; issuedAt: number },
+): Promise<Hex> {
+  const { walletClient, account } = await clientFor(primaryWallet);
+  const message = [
+    "VAR: authorize a mandate",
+    `agent: ${p.agent.toLowerCase()}`,
+    `principal: ${p.principal.toLowerCase()}`,
+    `spendCap: ${p.spendCap}`,
+    `expiryMinutes: ${p.expiryMinutes}`,
+    `issuedAt: ${p.issuedAt}`,
+  ].join("\n");
+  return walletClient.signMessage({ account, message });
+}
+
 // Relay a server-signed attestation. submitAttestation is permissionless, so the
 // connected wallet only pays gas; the attestor's signature carries the authority.
 export async function relaySubmitAttestation(

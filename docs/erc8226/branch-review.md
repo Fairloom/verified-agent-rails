@@ -292,6 +292,36 @@ if it does.
 
 The adapter is one hop from the problem, not free of it.
 
+> **UPDATE 2026-08-03 — both halves addressed. State it precisely.**
+>
+> **`checkPrincipal` now enforces personhood on every evaluation.** The adapter
+> stores a registered attestor's signed assertion that
+> `AgentBook.lookupHuman(agent) == humanId` on World Chain 480, with an expiry
+> and a revocation path, and `_evaluate` checks it on every call — returning
+> `IDENTITY_NOT_FOUND` when it is absent, revoked, or does not match. The
+> asserted `humanId` is bound to the mandate's own `proofRef` via
+> `keccak256(bytes32(humanId))`, so **`proofRef` is now checked rather than
+> merely committed to.** That derivation is pinned to live cross-chain data:
+> the humanId AgentBook returns for agent `0x69e170Dd…cC54` hashes to exactly
+> the `proofRef` in that agent's live Arc mandate.
+>
+> **What this earns, and what it does not.** AgentBook is on World Chain
+> *mainnet*; this adapter targets Ethereum *Sepolia*; World Chain settles to
+> Ethereum mainnet, so no canonical state root of 480 exists on Sepolia and no
+> storage proof or bridge can carry `lookupHuman` here. **Trustless on-chain
+> personhood on Sepolia is not hard, it is impossible.** (This also corrects
+> the storage-proof option floated earlier in this document — it is unavailable,
+> not merely heavy.) Every Sepolia-side design trusts someone; we trust the
+> attestor set the mirror already trusts, adding no new party. Say
+> **"personhood-attested and enforced at evaluation time."** Do **not** say
+> "trustlessly World-ID-verified on-chain" — only deploying the stack on World
+> Chain 480 would earn that.
+>
+> **§8.1's headline defect is fixed for the granting route** (proof of control
+> over `principal`), but its sibling privileged routes are hardened, not
+> authenticated. See the status block at `repo-brief.md` §8.1 for the exact
+> split before making any claim about the deployment being authenticated.
+
 ### 3.5 The `msg.sender == from` question — the most important one
 
 Their reference `canTransfer` returns true immediately when `msg.sender == from`, which

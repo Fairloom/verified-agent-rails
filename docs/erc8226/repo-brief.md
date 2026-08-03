@@ -508,6 +508,31 @@ Ranked roughly by how badly they'd land in review.
 
 ### 8.1 The granting API will sign a mandate for an unauthenticated caller
 
+> **STATUS 2026-08-03 — the headline defect is FIXED for `/api/var/grant`; the
+> sibling routes are hardened but NOT authenticated. Read both halves.**
+>
+> **Fixed.** The caller must now prove control of `principal` by signing a
+> statement committing to `(agent, principal, spendCap, expiryMinutes, issuedAt)`;
+> the server recovers it with `verifyMessage` (EOA and ERC-1271, so Dynamic MPC
+> wallets work) and rejects unless the signer *is* `principal`
+> (`web/lib/sameOrigin.ts` `principalProofInvalid`, wired at
+> `web/app/api/var/grant/route.ts`). `crossOriginBlocked` no longer returns
+> allow on a missing `Origin` header. Because the caps and expiry are inside the
+> signed statement, a captured signature cannot be replayed for different terms,
+> and the 5-minute `issuedAt` window bounds replay.
+> Verified by signature roundtrip: identical client/server statements, the
+> principal's own signature verifies, **an attacker's signature naming that
+> principal is rejected**, and a tampered `spendCap` is rejected.
+>
+> **NOT fixed — do not overclaim.** Requiring an `Origin` header is *not*
+> authentication: `curl -H "Origin: https://<host>"` passes it trivially. The
+> sibling privileged routes named at the end of this section
+> (`/api/var/pay`, `/api/var/create-agent`, `/api/var/fund-gas`) still have
+> **only** that guard, and `fund-gas` holds `GAS_FUNDER_PRIVATE_KEY`. They need
+> the same proof-of-control treatment or a real session before this deployment
+> can be called authenticated. §8.2 (single attestor key, single owner EOA) is
+> untouched and still governs everything downstream.
+
 `web/app/api/var/grant/route.ts`. The route holds `ATTESTOR_PRIVATE_KEY` and signs an
 EIP-712 attestation on request. Its only gate is `crossOriginBlocked`
 (`web/lib/sameOrigin.ts:9`), which **returns `null` — allow — when there is no `Origin`

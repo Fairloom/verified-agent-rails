@@ -3,6 +3,8 @@ pragma solidity ^0.8.26;
 
 import {IComplianceProvider} from "../interfaces/rams/IComplianceProvider.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {DelegationMirror} from "../DelegationMirror.sol";
 
 /// @title VARComplianceProviderAdapter
@@ -17,14 +19,18 @@ import {DelegationMirror} from "../DelegationMirror.sol";
 ///         non-conformant — so this adapter returns (eligible, ReasonCode,
 ///         expiresAt), mapping VAR attestation states onto the spec enum:
 ///
-///           mirror state                          -> ReasonCode
+///           state                                 -> ReasonCode
 ///           -------------------------------------------------------------
 ///           unknown identityRef / no mandate      -> IDENTITY_NOT_FOUND
 ///           bound agent's principal != principal  -> IDENTITY_NOT_FOUND
+///           no personhood record for the agent    -> IDENTITY_NOT_FOUND
+///           personhood revoked                    -> IDENTITY_NOT_FOUND
+///           personhood humanId != mandate proofRef-> IDENTITY_NOT_FOUND
+///           personhood attestation expired        -> KYC_EXPIRED
 ///           binding superseded by newer nonce     -> ATTESTATION_REVOKED
 ///           mandate revoked by principal          -> ATTESTATION_REVOKED
 ///           mandate expired                       -> KYC_EXPIRED
-///           live mandate                          -> COMPLIANT
+///           live mandate + live personhood        -> COMPLIANT
 ///
 ///         identityRef convention (spec: "keccak256 of a DID or attestation
 ///         ID"): VAR's attestation ID is the EIP-712 hashStruct of the
@@ -38,8 +44,60 @@ import {DelegationMirror} from "../DelegationMirror.sol";
 ///         (same agent, same nonce). Nobody can bind an identityRef to a
 ///         mandate that the attestation does not describe, so the adapter
 ///         adds no new trust assumptions on top of the mirror's attestor set.
-contract VARComplianceProviderAdapter is IComplianceProvider {
+///
+/// # Personhood, and exactly how strong this is
+///
+/// checkPrincipal enforces a World ID personhood record on EVERY evaluation,
+/// not once at grant time. Be precise about what that does and does not mean:
+///
+///  * It IS: a named, mirror-registered attestor cryptographically asserting
+///    `AgentBook.lookupHuman(agent) == humanId` on World Chain (480), recorded
+///    on-chain with an expiry, revocable, and re-checked on every call. The
+///    asserted humanId is bound to the mirror mandate's own `proofRef` — which
+///    is `keccak256(bytes32(humanId))`, verified against live World Chain and
+///    Arc data — so `proofRef` is now CHECKED, not merely committed to.
+///  * It is NOT: a trustless on-chain World ID verification. AgentBook lives on
+///    World Chain MAINNET; this adapter is on Ethereum Sepolia; World Chain
+///    settles to Ethereum mainnet, so no canonical state root of 480 exists on
+///    Sepolia and no storage proof or bridge can carry `lookupHuman` here. Every
+///    Sepolia-side design necessarily trusts someone. We trust the attestor set
+///    the mirror already trusts — no NEW party — but that is a trust assumption
+///    and must be described as one.
+///
+/// The claim this earns is "personhood-attested and enforced at evaluation
+/// time". It does not earn "trustlessly World-ID-verified on-chain". Only
+/// deploying this stack on World Chain 480, where AgentBook can be read
+/// directly, would earn that.
+contract VARComplianceProviderAdapter is IComplianceProvider, EIP712 {
     DelegationMirror public immutable mirror;
+
+    /// @notice A registered attestor's assertion that `agent` is human-backed.
+    struct Personhood {
+        uint256 humanId; // AgentBook.lookupHuman(agent) on World Chain 480; 0 = absent
+        uint48 expiresAt; // re-attestation deadline; 0 = no expiry
+        bool revoked;
+    }
+
+    /// @dev Signed payload for submitPersonhood.
+    struct PersonhoodAttestation {
+        address agent;
+        uint256 humanId;
+        uint48 expiresAt;
+        uint256 nonce;
+    }
+
+    bytes32 private constant PERSONHOOD_TYPEHASH =
+        keccak256("PersonhoodAttestation(address agent,uint256 humanId,uint48 expiresAt,uint256 nonce)");
+
+    mapping(address agent => Personhood) private _personhood;
+    /// @notice Strictly-increasing per-agent nonce; a replayed personhood
+    ///         attestation cannot resurrect a revoked or superseded record.
+    mapping(address agent => uint256) public personhoodNonces;
+
+    event PersonhoodAttested(
+        address indexed agent, uint256 indexed humanId, uint48 expiresAt, address indexed attestor
+    );
+    event PersonhoodRevoked(address indexed agent, address indexed attestor);
 
     struct Binding {
         address agent;
@@ -68,9 +126,95 @@ contract VARComplianceProviderAdapter is IComplianceProvider {
     error PrincipalStillEligible(bytes32 identityRef);
     /// @dev Binding is only meaningful for a mandate that is live right now.
     error MandateNotLive(address agent, ReasonCode reason);
+    error ZeroHumanId();
+    error NotRegisteredAttestor(address signer);
+    error StalePersonhoodNonce(address agent, uint256 provided, uint256 last);
+    error PersonhoodExpiryInPast(uint48 expiresAt);
+    error NoPersonhoodRecord(address agent);
+    error PersonhoodAlreadyRevoked(address agent);
 
-    constructor(DelegationMirror mirror_) {
+    constructor(DelegationMirror mirror_) EIP712("VARPersonhood", "1") {
         mirror = mirror_;
+    }
+
+    // ------------------------------------------------------------------
+    // Personhood: submitted once, ENFORCED on every checkPrincipal
+    // ------------------------------------------------------------------
+
+    /// @notice Record a registered attestor's assertion that `agent` is
+    ///         human-backed on World Chain. Permissionless to submit — the
+    ///         signature is the authority, exactly as with mirror attestations.
+    /// @dev The attestor is expected to have read AgentBook.lookupHuman(agent)
+    ///      on World Chain 480 before signing. That read cannot be reproduced
+    ///      on this chain (see the contract-level note), which is precisely why
+    ///      this is an attested claim rather than a proof.
+    function submitPersonhood(PersonhoodAttestation calldata p, bytes calldata sig) external {
+        if (p.humanId == 0) revert ZeroHumanId();
+        if (p.expiresAt != 0 && block.timestamp >= p.expiresAt) revert PersonhoodExpiryInPast(p.expiresAt);
+
+        uint256 last = personhoodNonces[p.agent];
+        if (p.nonce <= last) revert StalePersonhoodNonce(p.agent, p.nonce, last);
+
+        bytes32 digest = _hashTypedDataV4(
+            keccak256(abi.encode(PERSONHOOD_TYPEHASH, p.agent, p.humanId, p.expiresAt, p.nonce))
+        );
+        address signer = ECDSA.recover(digest, sig);
+        if (!mirror.registeredAttestor(signer)) revert NotRegisteredAttestor(signer);
+
+        personhoodNonces[p.agent] = p.nonce;
+        _personhood[p.agent] = Personhood({humanId: p.humanId, expiresAt: p.expiresAt, revoked: false});
+        emit PersonhoodAttested(p.agent, p.humanId, p.expiresAt, signer);
+    }
+
+    /// @notice Withdraw a personhood assertion. Any registered attestor may do
+    ///         this — de-registration on World Chain has no channel to this
+    ///         chain, so a human path is required. Takes effect on the very next
+    ///         checkPrincipal, and announces PrincipalRevoked for the agent's
+    ///         current identityRef so a freeze relay sees it.
+    function revokePersonhood(address agent) external {
+        if (!mirror.registeredAttestor(msg.sender)) revert NotRegisteredAttestor(msg.sender);
+        Personhood storage ph = _personhood[agent];
+        if (ph.humanId == 0) revert NoPersonhoodRecord(agent);
+        if (ph.revoked) revert PersonhoodAlreadyRevoked(agent);
+
+        ph.revoked = true;
+        emit PersonhoodRevoked(agent, msg.sender);
+
+        bytes32 current = _currentRefOf[agent];
+        if (current != bytes32(0)) _announceRevocation(current, ReasonCode.IDENTITY_NOT_FOUND);
+    }
+
+    /// @notice The personhood record for an agent.
+    function personhoodOf(address agent) external view returns (Personhood memory) {
+        return _personhood[agent];
+    }
+
+    /// @notice The proofRef a given humanId must produce, i.e.
+    ///         `keccak256(bytes32(humanId))`. Verified against live data: World
+    ///         Chain AgentBook humanId for agent 0x69e170Dd… hashes to exactly
+    ///         the proofRef carried by that agent's live Arc mandate.
+    function proofRefFor(uint256 humanId) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(bytes32(humanId)));
+    }
+
+    /// @dev Personhood as evaluated on every checkPrincipal call. Absent,
+    ///      revoked, or not matching the mandate's proofRef all read as
+    ///      IDENTITY_NOT_FOUND: we cannot say a human stands behind this agent.
+    function _checkPersonhood(address agent, bytes32 mandateProofRef)
+        private
+        view
+        returns (bool ok, ReasonCode reason, uint48 expiresAt)
+    {
+        Personhood memory ph = _personhood[agent];
+        if (ph.humanId == 0 || ph.revoked) return (false, ReasonCode.IDENTITY_NOT_FOUND, 0);
+        // Bind the asserted humanId to the proofRef the mandate actually
+        // carries. Without this the attestor could assert personhood for one
+        // human while the mandate was written against another.
+        if (proofRefFor(ph.humanId) != mandateProofRef) return (false, ReasonCode.IDENTITY_NOT_FOUND, 0);
+        if (ph.expiresAt != 0 && block.timestamp >= ph.expiresAt) {
+            return (false, ReasonCode.KYC_EXPIRED, ph.expiresAt);
+        }
+        return (true, ReasonCode.COMPLIANT, ph.expiresAt);
     }
 
     /// @notice Derive the identityRef for an attestation, per the convention above.
@@ -188,6 +332,13 @@ contract VARComplianceProviderAdapter is IComplianceProvider {
         if (m.principal == address(0) || m.principal != principal) {
             return (false, ReasonCode.IDENTITY_NOT_FOUND, 0);
         }
+
+        // Personhood, evaluated LIVE on every call rather than once at grant
+        // time. This is the check that was previously absent entirely: the old
+        // _evaluate read four mirror fields and never consulted proofRef at all.
+        (bool human, ReasonCode humanReason, uint48 humanExpiry) = _checkPersonhood(b.agent, m.proofRef);
+        if (!human) return (false, humanReason, humanExpiry);
+
         // A newer attestation replaced the one this identityRef refers to: the
         // attested credential is no longer the live one.
         if (m.nonce != b.nonce) return (false, ReasonCode.ATTESTATION_REVOKED, 0);

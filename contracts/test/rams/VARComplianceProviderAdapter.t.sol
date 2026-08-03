@@ -21,21 +21,67 @@ contract VARComplianceProviderAdapterTest is RamsTestBase {
 
     uint64 internal expiry;
 
+    /// @dev The REAL humanId that AgentBook.lookupHuman returns for the live
+    ///      demo agent 0x69e170Dd…cC54 on World Chain 480. Verified end to end:
+    ///      keccak256(bytes32(HUMAN_ID)) equals the proofRef carried by that
+    ///      agent's live Arc mandate (0x594f7934…6b79).
+    uint256 internal constant HUMAN_ID =
+        0x026c28de5fd602d237997e3ba77dac46a9a2e6750a59f68a4ae98d626f71db46; // pragma: allowlist secret
+    bytes32 internal constant REAL_PROOF_REF =
+        0x594f7934f74a36ba3d98a2cfe25f79921d75bd08d9f621035b29007b02f46b79; // pragma: allowlist secret
+
+    uint48 internal personhoodExpiry;
+
     function setUp() public {
         (principal, principalKey) = makeAddrAndKey("principal");
         _deployRamsStack();
         adapter = new VARComplianceProviderAdapter(mirror);
         expiry = uint64(block.timestamp + 3 days);
+        personhoodExpiry = uint48(block.timestamp + 30 days);
     }
 
     function _liveAttestation(uint256 nonce) internal view returns (DelegationMirror.Attestation memory) {
-        return _buildAttestation(varAgent, principal, bytes32("proof"), 10e6, expiry, address(gusd), nonce);
+        return _buildAttestation(varAgent, principal, REAL_PROOF_REF, 10e6, expiry, address(gusd), nonce);
+    }
+
+    function _signPersonhood(VARComplianceProviderAdapter.PersonhoodAttestation memory p, uint256 key)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256("PersonhoodAttestation(address agent,uint256 humanId,uint48 expiresAt,uint256 nonce)"),
+                p.agent,
+                p.humanId,
+                p.expiresAt,
+                p.nonce
+            )
+        );
+        bytes32 domain = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("VARPersonhood"),
+                keccak256("1"),
+                block.chainid,
+                address(adapter)
+            )
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, keccak256(abi.encodePacked("\x19\x01", domain, structHash)));
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _attestPersonhood(uint256 humanId, uint48 expiresAt, uint256 nonce) internal {
+        VARComplianceProviderAdapter.PersonhoodAttestation memory p = VARComplianceProviderAdapter
+            .PersonhoodAttestation({agent: varAgent, humanId: humanId, expiresAt: expiresAt, nonce: nonce});
+        adapter.submitPersonhood(p, _signPersonhood(p, attestorKey));
     }
 
     function _attestAndBind() internal returns (bytes32 identityRef) {
         DelegationMirror.Attestation memory a = _liveAttestation(1);
         mirror.submitAttestation(a, _sign(mirror, a, attestorKey));
         identityRef = adapter.bindIdentity(a);
+        _attestPersonhood(HUMAN_ID, personhoodExpiry, 1);
     }
 
     function test_IdentityRefConvention() public {
@@ -240,6 +286,108 @@ contract VARComplianceProviderAdapterTest is RamsTestBase {
             )
         );
         adapter.bindIdentity(a);
+    }
+
+    // ------------------------------------------------------------------
+    // Personhood, enforced at EVALUATION time. Before this, checkPrincipal
+    // never consulted proofRef at all and no personhood check existed.
+    // ------------------------------------------------------------------
+
+    /// @notice The derivation this whole binding rests on, pinned against live
+    ///         cross-chain data: World Chain AgentBook humanId -> Arc proofRef.
+    function test_ProofRefDerivationMatchesLiveWorldChainData() public view {
+        assertEq(adapter.proofRefFor(HUMAN_ID), REAL_PROOF_REF, "keccak256(bytes32(humanId)) == live proofRef");
+    }
+
+    /// @notice THE negative case: a bound, live, unexpired mandate whose agent
+    ///         has NO personhood record is not eligible.
+    function test_NoPersonhoodRecord_IsIdentityNotFound() public {
+        DelegationMirror.Attestation memory a = _liveAttestation(1);
+        mirror.submitAttestation(a, _sign(mirror, a, attestorKey));
+        bytes32 ref = adapter.bindIdentity(a); // deliberately no _attestPersonhood
+
+        (bool ok, IComplianceProvider.ReasonCode reason,) = adapter.checkPrincipal(principal, ref);
+        assertFalse(ok, "no personhood => not eligible");
+        assertEq(uint8(reason), uint8(IComplianceProvider.ReasonCode.IDENTITY_NOT_FOUND));
+    }
+
+    /// @notice Enforcement is at EVALUATION time, not only at grant time: a
+    ///         principal that was compliant becomes ineligible the moment
+    ///         personhood is withdrawn, with no mandate change at all.
+    function test_PersonhoodRevoked_FlipsAnAlreadyCompliantPrincipal() public {
+        bytes32 ref = _attestAndBind();
+        (bool ok,,) = adapter.checkPrincipal(principal, ref);
+        assertTrue(ok, "compliant before revocation");
+
+        vm.prank(attestor);
+        adapter.revokePersonhood(varAgent);
+
+        IComplianceProvider.ReasonCode reason;
+        (ok, reason,) = adapter.checkPrincipal(principal, ref);
+        assertFalse(ok, "personhood withdrawn => ineligible on the very next call");
+        assertEq(uint8(reason), uint8(IComplianceProvider.ReasonCode.IDENTITY_NOT_FOUND));
+    }
+
+    function test_PersonhoodExpiry_MapsToKycExpired() public {
+        bytes32 ref = _attestAndBind();
+        vm.warp(uint256(personhoodExpiry));
+
+        (bool ok, IComplianceProvider.ReasonCode reason, uint48 expiresAt) = adapter.checkPrincipal(principal, ref);
+        assertFalse(ok);
+        assertEq(uint8(reason), uint8(IComplianceProvider.ReasonCode.KYC_EXPIRED));
+        assertEq(expiresAt, personhoodExpiry, "real personhood expiry surfaced");
+    }
+
+    /// @notice An attestor cannot assert personhood for a DIFFERENT human than
+    ///         the one the mandate was written against.
+    function test_PersonhoodBoundToMandateProofRef() public {
+        DelegationMirror.Attestation memory a = _liveAttestation(1);
+        mirror.submitAttestation(a, _sign(mirror, a, attestorKey));
+        bytes32 ref = adapter.bindIdentity(a);
+        _attestPersonhood(HUMAN_ID + 1, personhoodExpiry, 1); // wrong human, valid signature
+
+        (bool ok, IComplianceProvider.ReasonCode reason,) = adapter.checkPrincipal(principal, ref);
+        assertFalse(ok, "humanId must hash to the mandate's proofRef");
+        assertEq(uint8(reason), uint8(IComplianceProvider.ReasonCode.IDENTITY_NOT_FOUND));
+    }
+
+    function test_PersonhoodRejectsUnregisteredSigner() public {
+        (, uint256 rogueKey) = makeAddrAndKey("rogue");
+        VARComplianceProviderAdapter.PersonhoodAttestation memory p = VARComplianceProviderAdapter
+            .PersonhoodAttestation({
+            agent: varAgent,
+            humanId: HUMAN_ID,
+            expiresAt: personhoodExpiry,
+            nonce: 1
+        });
+        vm.expectRevert();
+        adapter.submitPersonhood(p, _signPersonhood(p, rogueKey));
+    }
+
+    function test_PersonhoodRejectsZeroHumanAndReplay() public {
+        VARComplianceProviderAdapter.PersonhoodAttestation memory zero = VARComplianceProviderAdapter
+            .PersonhoodAttestation({agent: varAgent, humanId: 0, expiresAt: personhoodExpiry, nonce: 1});
+        vm.expectRevert(VARComplianceProviderAdapter.ZeroHumanId.selector);
+        adapter.submitPersonhood(zero, _signPersonhood(zero, attestorKey));
+
+        _attestPersonhood(HUMAN_ID, personhoodExpiry, 1);
+        // Replaying the same nonce must not resurrect a withdrawn record.
+        vm.prank(attestor);
+        adapter.revokePersonhood(varAgent);
+        vm.expectRevert(
+            abi.encodeWithSelector(VARComplianceProviderAdapter.StalePersonhoodNonce.selector, varAgent, 1, 1)
+        );
+        _attestPersonhood(HUMAN_ID, personhoodExpiry, 1);
+    }
+
+    /// @notice Withdrawing personhood announces PrincipalRevoked so a freeze
+    ///         relay sees it, without needing a separate poke.
+    function test_RevokePersonhood_AnnouncesPrincipalRevoked() public {
+        bytes32 ref = _attestAndBind();
+        vm.expectEmit(true, true, false, true, address(adapter));
+        emit IComplianceProvider.PrincipalRevoked(principal, ref, IComplianceProvider.ReasonCode.IDENTITY_NOT_FOUND);
+        vm.prank(attestor);
+        adapter.revokePersonhood(varAgent);
     }
 
     function test_SyncRevocation_RejectsEligibleUnknownAndDuplicate() public {
